@@ -28,6 +28,11 @@ export interface StreamCheckResult {
   errorCategory?: string;
 }
 
+export interface Ipv4CodexPromptTestResult {
+  modelUsed: string;
+  responseText: string;
+}
+
 // ===== 流式健康检查 API =====
 
 /**
@@ -64,4 +69,18 @@ export async function saveStreamCheckConfig(
   config: StreamCheckConfig,
 ): Promise<void> {
   return invoke("save_stream_check_config", { config });
+}
+
+export async function testIpv4CodexPrompt(
+  ipv4: string,
+  apiKey: string,
+  config: StreamCheckConfig,
+  overrideModel?: string,
+): Promise<Ipv4CodexPromptTestResult> {
+  return invoke("test_ipv4_codex_prompt", {
+    ipv4,
+    apiKey,
+    config,
+    overrideModel,
+  });
 }

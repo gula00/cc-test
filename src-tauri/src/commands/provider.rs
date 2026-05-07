@@ -46,6 +46,16 @@ pub fn add_provider(
 }
 
 #[tauri::command]
+pub fn add_provider_inactive(
+    state: State<'_, AppState>,
+    app: String,
+    provider: Provider,
+) -> Result<bool, String> {
+    let app_type = AppType::from_str(&app).map_err(|e| e.to_string())?;
+    ProviderService::add_inactive(state.inner(), app_type, provider).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 pub fn update_provider(
     state: State<'_, AppState>,
     app: String,

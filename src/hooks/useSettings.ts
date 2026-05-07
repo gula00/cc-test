@@ -13,7 +13,7 @@ import {
 } from "./useDirectorySettings";
 import { useSettingsMetadata } from "./useSettingsMetadata";
 
-type Language = "zh" | "en" | "ja";
+type Language = "zh" | "en";
 
 interface SaveResult {
   requiresRestart: boolean;

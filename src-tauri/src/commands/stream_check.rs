@@ -7,6 +7,8 @@ use crate::services::stream_check::{
     HealthStatus, StreamCheckConfig, StreamCheckResult, StreamCheckService,
 };
 use crate::store::AppState;
+use serde::Serialize;
+use serde_json::{json, Value};
 use std::collections::HashSet;
 use tauri::State;
 
@@ -162,6 +164,309 @@ pub fn save_stream_check_config(
     state.db.save_stream_check_config(&config)
 }
 
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Ipv4CodexPromptTestResult {
+    pub model_used: String,
+    pub response_text: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Ipv4ModelCandidate {
+    id: String,
+    owned_by: Option<String>,
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub async fn test_ipv4_codex_prompt(
+    ipv4: String,
+    api_key: String,
+    config: StreamCheckConfig,
+    #[allow(non_snake_case)] overrideModel: Option<String>,
+) -> Result<Ipv4CodexPromptTestResult, AppError> {
+    let target = ipv4.trim();
+    if target.is_empty() {
+        return Err(AppError::Message("IPv4 is required".to_string()));
+    }
+
+    let api_key = api_key.trim();
+    if api_key.is_empty() {
+        return Err(AppError::Message("API Key is required".to_string()));
+    }
+
+    let prompt = config.test_prompt.trim();
+    if prompt.is_empty() {
+        return Err(AppError::Message("Test prompt is required".to_string()));
+    }
+
+    let requested_model = overrideModel
+        .as_deref()
+        .unwrap_or(config.codex_model.trim());
+    let (configured_model, reasoning_effort) = parse_model_with_effort(requested_model);
+
+    if configured_model.is_empty() {
+        return Err(AppError::Message("Codex test model is required".to_string()));
+    }
+
+    let model_used = resolve_ipv4_test_model(target, api_key, &configured_model, config.timeout_secs)
+        .await
+        .unwrap_or(configured_model);
+
+    let mut body = json!({
+        "model": model_used,
+        "input": [{ "role": "user", "content": prompt }],
+        "stream": false
+    });
+
+    if let Some(effort) = reasoning_effort {
+        body["reasoning"] = json!({ "effort": effort });
+    }
+
+    let client = crate::proxy::http_client::get();
+    let timeout = std::time::Duration::from_secs(config.timeout_secs);
+    let urls = [
+        format!("http://{target}:8317/responses"),
+        format!("http://{target}:8317/v1/responses"),
+    ];
+
+    for (index, url) in urls.iter().enumerate() {
+        let response = client
+            .post(url)
+            .header("authorization", format!("Bearer {api_key}"))
+            .header("content-type", "application/json")
+            .header("accept", "application/json")
+            .header("accept-encoding", "identity")
+            .header(
+                "user-agent",
+                format!(
+                    "codex_cli_rs/0.80.0 ({} 15.7.2; {}) Terminal",
+                    os_name(),
+                    arch_name()
+                ),
+            )
+            .header("originator", "codex_cli_rs")
+            .timeout(timeout)
+            .json(&body)
+            .send()
+            .await
+            .map_err(map_request_error)?;
+
+        let status = response.status().as_u16();
+        let response_text = response.text().await.unwrap_or_default();
+
+        if !(200..300).contains(&status) {
+            if index == 0 && status == 404 {
+                continue;
+            }
+            return Err(http_status_error(status, response_text));
+        }
+
+        let parsed: Value = serde_json::from_str(&response_text)
+            .map_err(|e| AppError::Message(format!("Failed to parse response JSON: {e}")))?;
+
+        return Ok(Ipv4CodexPromptTestResult {
+            model_used,
+            response_text: extract_response_text(&parsed).unwrap_or(response_text),
+        });
+    }
+
+    Err(AppError::Message(
+        "No valid Codex responses endpoint found".to_string(),
+    ))
+}
+
+async fn resolve_ipv4_test_model(
+    target: &str,
+    api_key: &str,
+    configured_model: &str,
+    timeout_secs: u64,
+) -> Result<String, AppError> {
+    let available_models = fetch_ipv4_models(target, api_key, timeout_secs).await?;
+    if available_models.is_empty() {
+        return Ok(configured_model.to_string());
+    }
+
+    let has_gpt = available_models.iter().any(is_gpt_model);
+    if has_gpt {
+        return Ok(configured_model.to_string());
+    }
+
+    if let Some(google_model) = available_models.iter().find(|model| is_google_model(model)) {
+        return Ok(google_model.id.clone());
+    }
+
+    Ok(configured_model.to_string())
+}
+
+async fn fetch_ipv4_models(
+    target: &str,
+    api_key: &str,
+    timeout_secs: u64,
+) -> Result<Vec<Ipv4ModelCandidate>, AppError> {
+    let client = crate::proxy::http_client::get();
+    let timeout = std::time::Duration::from_secs(timeout_secs);
+    let urls = [
+        format!("http://{target}:8317/v1/models"),
+        format!("http://{target}:8317/models"),
+    ];
+
+    for (index, url) in urls.iter().enumerate() {
+        let response = client
+            .get(url)
+            .header("authorization", format!("Bearer {api_key}"))
+            .header("accept", "application/json")
+            .header("accept-encoding", "identity")
+            .timeout(timeout)
+            .send()
+            .await
+            .map_err(map_request_error)?;
+
+        let status = response.status().as_u16();
+        let response_text = response.text().await.unwrap_or_default();
+
+        if !(200..300).contains(&status) {
+            if index == 0 && status == 404 {
+                continue;
+            }
+            return Err(http_status_error(status, response_text));
+        }
+
+        let parsed: Value = serde_json::from_str(&response_text)
+            .map_err(|e| AppError::Message(format!("Failed to parse models JSON: {e}")))?;
+        return Ok(extract_model_candidates(&parsed));
+    }
+
+    Ok(Vec::new())
+}
+
+fn parse_model_with_effort(model: &str) -> (String, Option<String>) {
+    if let Some(pos) = model.find('@').or_else(|| model.find('#')) {
+        let actual_model = model[..pos].trim().to_string();
+        let effort = model[pos + 1..].trim().to_string();
+        if !effort.is_empty() {
+            return (actual_model, Some(effort));
+        }
+        return (actual_model, None);
+    }
+
+    (model.trim().to_string(), None)
+}
+
+fn extract_model_candidates(value: &Value) -> Vec<Ipv4ModelCandidate> {
+    value
+        .get("data")
+        .and_then(|item| item.as_array())
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|item| {
+                    let id = item.get("id").and_then(|id| id.as_str())?.trim().to_string();
+                    if id.is_empty() {
+                        return None;
+                    }
+
+                    let owned_by = item
+                        .get("owned_by")
+                        .and_then(|owner| owner.as_str())
+                        .map(|owner| owner.trim().to_string())
+                        .filter(|owner| !owner.is_empty());
+
+                    Some(Ipv4ModelCandidate { id, owned_by })
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn is_gpt_model(model: &Ipv4ModelCandidate) -> bool {
+    model.id.to_ascii_lowercase().contains("gpt")
+}
+
+fn is_google_model(model: &Ipv4ModelCandidate) -> bool {
+    let model_id = model.id.to_ascii_lowercase();
+    let owned_by = model
+        .owned_by
+        .as_deref()
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+
+    owned_by.contains("google")
+        || owned_by.contains("antigravity")
+        || model_id.contains("google")
+        || model_id.contains("gemini")
+        || model_id.contains("gemma")
+}
+
+fn extract_response_text(value: &Value) -> Option<String> {
+    if let Some(text) = value.get("output_text").and_then(|v| v.as_str()) {
+        let trimmed = text.trim();
+        if !trimmed.is_empty() {
+            return Some(trimmed.to_string());
+        }
+    }
+
+    let output = value.get("output")?.as_array()?;
+    let mut texts = Vec::new();
+
+    for item in output {
+        let Some(content) = item.get("content").and_then(|v| v.as_array()) else {
+            continue;
+        };
+
+        for part in content {
+            if let Some(text) = part.get("text").and_then(|v| v.as_str()) {
+                let trimmed = text.trim();
+                if !trimmed.is_empty() {
+                    texts.push(trimmed.to_string());
+                }
+            }
+        }
+    }
+
+    if texts.is_empty() {
+        None
+    } else {
+        Some(texts.join("\n\n"))
+    }
+}
+
+fn map_request_error(e: reqwest::Error) -> AppError {
+    if e.is_timeout() {
+        AppError::Message("Request timeout".to_string())
+    } else if e.is_connect() {
+        AppError::Message(format!("Connection failed: {e}"))
+    } else {
+        AppError::Message(e.to_string())
+    }
+}
+
+fn http_status_error(status: u16, body: String) -> AppError {
+    let body = if body.len() > 400 {
+        body.chars().take(400).collect::<String>()
+    } else {
+        body
+    };
+    AppError::Message(format!("HTTP {status}: {body}"))
+}
+
+fn os_name() -> &'static str {
+    match std::env::consts::OS {
+        "windows" => "windows",
+        "macos" => "macos",
+        "linux" => "linux",
+        other => other,
+    }
+}
+
+fn arch_name() -> &'static str {
+    match std::env::consts::ARCH {
+        "x86_64" => "x64",
+        "aarch64" => "arm64",
+        "x86" => "x86",
+        other => other,
+    }
+}
+
 async fn resolve_copilot_auth_override(
     provider: &crate::provider::Provider,
     copilot_state: &State<'_, CopilotAuthState>,
@@ -288,7 +593,10 @@ async fn resolve_claude_api_format_override(
 
 #[cfg(test)]
 mod tests {
-    use super::is_copilot_provider;
+    use super::{
+        extract_model_candidates, is_copilot_provider, is_google_model, is_gpt_model,
+        Ipv4ModelCandidate,
+    };
     use crate::provider::{Provider, ProviderMeta};
     use serde_json::json;
 
@@ -360,5 +668,60 @@ mod tests {
             provider.meta.as_ref().and_then(|meta| meta.is_full_url),
             Some(true)
         );
+    }
+
+    #[test]
+    fn extract_model_candidates_reads_openai_models_payload() {
+        let payload = json!({
+            "data": [
+                { "id": "gpt-5.4", "owned_by": "openai" },
+                { "id": "Gemma 4 31B IT", "owned_by": "google" }
+            ]
+        });
+
+        assert_eq!(
+            extract_model_candidates(&payload),
+            vec![
+                Ipv4ModelCandidate {
+                    id: "gpt-5.4".to_string(),
+                    owned_by: Some("openai".to_string())
+                },
+                Ipv4ModelCandidate {
+                    id: "Gemma 4 31B IT".to_string(),
+                    owned_by: Some("google".to_string())
+                }
+            ]
+        );
+    }
+
+    #[test]
+    fn model_family_helpers_detect_gpt_and_google() {
+        let gpt = Ipv4ModelCandidate {
+            id: "gpt-5.4".to_string(),
+            owned_by: Some("openai".to_string()),
+        };
+        let google_owned_gemma = Ipv4ModelCandidate {
+            id: "Gemma 4 31B IT".to_string(),
+            owned_by: Some("google".to_string()),
+        };
+        let gemini = Ipv4ModelCandidate {
+            id: "gemini-2.0-flash".to_string(),
+            owned_by: None,
+        };
+        let antigravity = Ipv4ModelCandidate {
+            id: "claude-sonnet-4-6".to_string(),
+            owned_by: Some("antigravity".to_string()),
+        };
+        let claude = Ipv4ModelCandidate {
+            id: "claude-sonnet-4".to_string(),
+            owned_by: Some("anthropic".to_string()),
+        };
+
+        assert!(is_gpt_model(&gpt));
+        assert!(!is_gpt_model(&google_owned_gemma));
+        assert!(is_google_model(&google_owned_gemma));
+        assert!(is_google_model(&gemini));
+        assert!(is_google_model(&antigravity));
+        assert!(!is_google_model(&claude));
     }
 }

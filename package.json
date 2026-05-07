@@ -3,9 +3,10 @@
   "version": "3.14.1",
   "description": "All-in-One Assistant for Claude Code, Codex & Gemini CLI",
   "type": "module",
+  "packageManager": "bun@1.3.10",
   "scripts": {
-    "dev": "pnpm tauri dev",
-    "build": "pnpm tauri build",
+    "dev": "bun run tauri dev",
+    "build": "bun run tauri build",
     "tauri": "tauri",
     "dev:renderer": "vite",
     "build:renderer": "vite build",

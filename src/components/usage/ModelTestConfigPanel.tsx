@@ -7,6 +7,7 @@ import { Label } from "@/components/ui/label";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Save, Loader2 } from "lucide-react";
 import { toast } from "sonner";
+import { Ipv4ModelFetchPanel } from "@/components/usage/Ipv4ModelFetchPanel";
 import {
   getStreamCheckConfig,
   saveStreamCheckConfig,
@@ -224,6 +225,10 @@ export function ModelTestConfigPanel() {
             </>
           )}
         </Button>
+      </div>
+
+      <div className="border-t border-border/50 pt-6">
+        <Ipv4ModelFetchPanel />
       </div>
     </div>
   );

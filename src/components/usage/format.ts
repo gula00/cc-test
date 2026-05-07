@@ -34,6 +34,5 @@ export function fmtUsd(
 export function getLocaleFromLanguage(language: string): string {
   if (!language) return "en-US";
   if (language.startsWith("zh")) return "zh-CN";
-  if (language.startsWith("ja")) return "ja-JP";
   return "en-US";
 }

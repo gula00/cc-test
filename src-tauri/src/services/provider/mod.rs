@@ -598,6 +598,59 @@ base_url = "http://localhost:8080"
 
     #[test]
     #[serial]
+    fn add_inactive_codex_provider_does_not_set_current_or_touch_live() {
+        with_test_home(|state, _| {
+            let provider = Provider {
+                id: "codex-inactive".to_string(),
+                name: "Codex Inactive".to_string(),
+                settings_config: json!({
+                    "auth": {
+                        "OPENAI_API_KEY": "test-key"
+                    },
+                    "config": r#"model_provider = "custom"
+model = "gpt-5.4"
+model_reasoning_effort = "low"
+disable_response_storage = true
+
+[model_providers.custom]
+name = "custom"
+base_url = "http://127.0.0.1:8317/v1"
+wire_api = "responses"
+requires_openai_auth = true"#
+                }),
+                website_url: None,
+                category: Some("custom".to_string()),
+                created_at: Some(1),
+                sort_index: Some(0),
+                notes: None,
+                meta: None,
+                icon: None,
+                icon_color: None,
+                in_failover_queue: false,
+            };
+
+            ProviderService::add_inactive(state, AppType::Codex, provider.clone())
+                .expect("save inactive codex provider");
+
+            let current = state
+                .db
+                .get_current_provider(AppType::Codex.as_str())
+                .expect("query current provider");
+            assert!(
+                current.is_none(),
+                "inactive add should not set current provider"
+            );
+
+            let saved = state
+                .db
+                .get_provider_by_id(&provider.id, AppType::Codex.as_str())
+                .expect("query saved provider");
+            assert!(saved.is_some(), "provider should still be stored");
+        });
+    }
+
+    #[test]
+    #[serial]
     fn sync_current_provider_for_app_restores_legacy_opencode_provider_after_live_reset() {
         with_test_home(|state, _| {
             let provider = opencode_provider("legacy-opencode-reset");
@@ -1038,6 +1091,24 @@ impl ProviderService {
             write_live_with_common_config(state.db.as_ref(), &app_type, &provider)?;
         }
 
+        Ok(true)
+    }
+
+    /// Add a provider to the database without activating or syncing it to live config.
+    pub fn add_inactive(
+        state: &AppState,
+        app_type: AppType,
+        provider: Provider,
+    ) -> Result<bool, AppError> {
+        let mut provider = provider;
+        Self::normalize_provider_if_claude(&app_type, &mut provider);
+        Self::validate_provider_settings(&app_type, &provider)?;
+        normalize_provider_common_config_for_storage(state.db.as_ref(), &app_type, &mut provider)?;
+        if app_type.is_additive_mode() {
+            Self::set_provider_live_config_managed(&mut provider, false);
+        }
+
+        state.db.save_provider(app_type.as_str(), &provider)?;
         Ok(true)
     }
 

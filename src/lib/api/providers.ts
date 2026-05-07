@@ -42,6 +42,10 @@ export const providersApi = {
     return await invoke("add_provider", { provider, app: appId, addToLive });
   },
 
+  async addInactive(provider: Provider, appId: AppId): Promise<boolean> {
+    return await invoke("add_provider_inactive", { provider, app: appId });
+  },
+
   async update(
     provider: Provider,
     appId: AppId,
@@ -72,6 +76,10 @@ export const providersApi = {
 
   async importDefault(appId: AppId): Promise<boolean> {
     return await invoke("import_default_config", { app: appId });
+  },
+
+  async readLiveSettings(appId: AppId): Promise<unknown> {
+    return await invoke("read_live_provider_settings", { app: appId });
   },
 
   async updateTrayMenu(): Promise<boolean> {

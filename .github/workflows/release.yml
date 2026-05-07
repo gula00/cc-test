@@ -28,10 +28,10 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v6
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
         with:
-          node-version: '20'
+          bun-version-file: '.bun-version'
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
@@ -73,26 +73,8 @@ jobs:
           sudo apt-get install -y --no-install-recommends libsoup-3.0-dev \
             || sudo apt-get install -y --no-install-recommends libsoup2.4-dev
 
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v6
-        with:
-          version: 10.12.3
-          run_install: false
-
-      - name: Get pnpm store directory
-        id: pnpm-store
-        shell: bash
-        run: echo "path=$(pnpm store path --silent)" >> $GITHUB_OUTPUT
-
-      - name: Setup pnpm cache
-        uses: actions/cache@v5
-        with:
-          path: ${{ steps.pnpm-store.outputs.path }}
-          key: ${{ runner.os }}-${{ runner.arch }}-pnpm-store-${{ hashFiles('**/pnpm-lock.yaml') }}
-          restore-keys: ${{ runner.os }}-${{ runner.arch }}-pnpm-store-
-
       - name: Install frontend deps
-        run: pnpm install --frozen-lockfile
+        run: bun install --frozen-lockfile
 
       - name: Prepare Tauri signing key
         shell: bash
@@ -138,7 +120,7 @@ jobs:
           elif command -v openssl >/dev/null 2>&1; then
             KEY_B64=$(openssl base64 -A -in "$KEY_PATH")
           else
-            KEY_B64=$(KEY_PATH="$KEY_PATH" node -e "process.stdout.write(require('fs').readFileSync(process.env.KEY_PATH).toString('base64'))")
+            KEY_B64=$(KEY_PATH="$KEY_PATH" python -c "import base64, os, pathlib; print(base64.b64encode(pathlib.Path(os.environ['KEY_PATH']).read_bytes()).decode(), end='')")
           fi
           if [ -z "$KEY_B64" ]; then
             echo "❌ 无法生成私钥 base64 内容" >&2
@@ -206,7 +188,7 @@ jobs:
           max_attempts=3
           for attempt in $(seq 1 "$max_attempts"); do
             echo "=== macOS build/notarization attempt ${attempt}/${max_attempts} ==="
-            if pnpm tauri build --target universal-apple-darwin; then
+            if bun run tauri build --target universal-apple-darwin; then
               echo "✅ macOS build/notarization succeeded"
               exit 0
             fi
@@ -223,11 +205,11 @@ jobs:
 
       - name: Build Tauri App (Windows)
         if: runner.os == 'Windows'
-        run: pnpm tauri build
+        run: bun run tauri build
 
       - name: Build Tauri App (Linux)
         if: runner.os == 'Linux'
-        run: pnpm tauri build --bundles appimage,deb,rpm
+        run: bun run tauri build --bundles appimage,deb,rpm
 
       - name: Prepare macOS Assets
         if: runner.os == 'macOS'

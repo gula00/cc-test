@@ -1033,6 +1033,7 @@ pub fn run() {
             commands::get_providers,
             commands::get_current_provider,
             commands::add_provider,
+            commands::add_provider_inactive,
             commands::update_provider,
             commands::delete_provider,
             commands::remove_provider_from_live_config,
@@ -1229,6 +1230,7 @@ pub fn run() {
             commands::stream_check_all_providers,
             commands::get_stream_check_config,
             commands::save_stream_check_config,
+            commands::test_ipv4_codex_prompt,
             // Session manager
             commands::list_sessions,
             commands::get_session_messages,
