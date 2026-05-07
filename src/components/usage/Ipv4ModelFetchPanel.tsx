@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
-import { generateThirdPartyAuth, generateThirdPartyConfig } from "@/config/codexProviderPresets";
+import { generateThirdPartyAuth } from "@/config/codexProviderPresets";
 import { fetchModelsForConfig, type FetchedModel } from "@/lib/api/model-fetch";
 import {
   getStreamCheckConfig,
@@ -35,47 +35,30 @@ function extractCodexApiKey(settings: unknown): string {
   return typeof apiKey === "string" ? apiKey.trim() : "";
 }
 
-function parseCodexModelWithEffort(model: string): {
-  modelName: string;
-  reasoningEffort: string;
-} {
-  const trimmed = model.trim();
-  if (!trimmed) {
-    return {
-      modelName: "gpt-5.4",
-      reasoningEffort: "high",
-    };
-  }
+function buildIpv4CodexConfig(ipv4: string): string {
+  const baseUrl = `http://${ipv4}:${FIXED_PORT}/v1`;
+  return `model_provider = "cliproxyapi"
+model = "gpt-5.5"
+model_reasoning_effort = "medium"
+disable_response_storage = true
 
-  const separatorIndex = [...["@","#"]]
-    .map((separator) => trimmed.indexOf(separator))
-    .filter((index) => index >= 0)
-    .sort((a, b) => a - b)[0];
+[model_providers.cliproxyapi]
+name = "${ipv4}"
+base_url = "${baseUrl}"
+wire_api = "responses"
+requires_openai_auth = true
 
-  if (separatorIndex === undefined) {
-    return {
-      modelName: trimmed,
-      reasoningEffort: "high",
-    };
-  }
+[windows]
+sandbox = "elevated"
 
-  const modelName = trimmed.slice(0, separatorIndex).trim() || "gpt-5.4";
-  const reasoningEffort = trimmed.slice(separatorIndex + 1).trim() || "high";
-  return { modelName, reasoningEffort };
+[features]
+goals = true`;
 }
 
 function buildIpv4CodexProvider(
   ipv4: string,
   apiKey: string,
-  config: StreamCheckConfig,
 ): Provider {
-  const { modelName, reasoningEffort } = parseCodexModelWithEffort(config.codexModel);
-  const baseUrl = `http://${ipv4}:${FIXED_PORT}/v1`;
-  const generatedConfig = generateThirdPartyConfig(ipv4, baseUrl, modelName).replace(
-    /model_reasoning_effort = ".*?"/,
-    `model_reasoning_effort = "${reasoningEffort}"`,
-  );
-
   return {
     id: `codex-ipv4-${generateUUID()}`,
     name: ipv4,
@@ -83,7 +66,7 @@ function buildIpv4CodexProvider(
     createdAt: Date.now(),
     settingsConfig: {
       auth: generateThirdPartyAuth(apiKey),
-      config: generatedConfig,
+      config: buildIpv4CodexConfig(ipv4),
     },
   };
 }
@@ -297,7 +280,7 @@ export function Ipv4ModelFetchPanel() {
       const provider =
         applyTargetApp === "gemini"
           ? buildIpv4GeminiProvider(trimmedIpv4, apiKey, replyResult.modelUsed)
-          : buildIpv4CodexProvider(trimmedIpv4, apiKey, streamCheckConfig);
+          : buildIpv4CodexProvider(trimmedIpv4, apiKey);
       await providersApi.addInactive(provider, applyTargetApp);
       setAppliedIpv4(trimmedIpv4);
       toast.success(

@@ -139,10 +139,9 @@ pub async fn stream_check_all_providers(
         .await
         .unwrap_or_else(|e| {
             let (http_status, message) = match &e {
-                crate::error::AppError::HttpStatus { status, .. } => (
-                    Some(*status),
-                    StreamCheckService::classify_http_status(*status).to_string(),
-                ),
+                crate::error::AppError::HttpStatus { status, body } => {
+                    (Some(*status), format!("HTTP {status}: {body}"))
+                }
                 _ => (None, e.to_string()),
             };
             StreamCheckResult {

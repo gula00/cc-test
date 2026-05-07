@@ -760,7 +760,7 @@ impl StreamCheckService {
                         let category = Self::detect_error_category(*status, body);
                         (
                             Some(*status),
-                            Self::classify_http_status(*status).to_string(),
+                            format!("HTTP {status}: {body}"),
                             category.map(|s| s.to_string()),
                         )
                     }

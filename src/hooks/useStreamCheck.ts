@@ -3,6 +3,7 @@ import { toast } from "sonner";
 import { useTranslation } from "react-i18next";
 import {
   streamCheckProvider,
+  streamCheckAllProviders,
   type StreamCheckResult,
 } from "@/lib/api/model-test";
 import type { AppId } from "@/lib/api";
@@ -11,6 +12,7 @@ import { useResetCircuitBreaker } from "@/lib/query/failover";
 export function useStreamCheck(appId: AppId) {
   const { t } = useTranslation();
   const [checkingIds, setCheckingIds] = useState<Set<string>>(new Set());
+  const [isCheckingAll, setIsCheckingAll] = useState(false);
   const resetCircuitBreaker = useResetCircuitBreaker();
 
   const checkProvider = useCallback(
@@ -93,19 +95,27 @@ export function useStreamCheck(appId: AppId) {
             toast.warning(
               t("streamCheck.rejected", {
                 providerName: providerName,
-                message: result.message,
+                message: "",
                 defaultValue: `${providerName} 检查被拒: ${result.message}`,
               }),
-              { description, duration: 8000, closeButton: true },
+              {
+                description: result.message || description,
+                duration: 12000,
+                closeButton: true,
+              },
             );
           } else {
             toast.error(
               t("streamCheck.failed", {
                 providerName: providerName,
-                message: result.message,
+                message: "",
                 defaultValue: `${providerName} 检查失败: ${result.message}`,
               }),
-              { description, duration: 8000, closeButton: true },
+              {
+                description: result.message || description,
+                duration: 12000,
+                closeButton: true,
+              },
             );
           }
         }
@@ -136,5 +146,68 @@ export function useStreamCheck(appId: AppId) {
     [checkingIds],
   );
 
-  return { checkProvider, isChecking };
+  const checkAllProviders = useCallback(async (): Promise<
+    Record<string, StreamCheckResult>
+  > => {
+    setIsCheckingAll(true);
+
+    try {
+      const entries = await streamCheckAllProviders(appId);
+      const nextResults = Object.fromEntries(entries);
+
+      let operationalCount = 0;
+      let degradedCount = 0;
+      let failedCount = 0;
+
+      for (const [providerId, result] of entries) {
+        if (result.status === "operational") {
+          operationalCount += 1;
+          resetCircuitBreaker.mutate({ providerId, appType: appId });
+        } else if (result.status === "degraded") {
+          degradedCount += 1;
+          resetCircuitBreaker.mutate({ providerId, appType: appId });
+        } else {
+          failedCount += 1;
+        }
+      }
+
+      if (failedCount === 0) {
+        toast.success(
+          t("streamCheck.bulkSuccess", {
+            operationalCount,
+            degradedCount,
+            defaultValue:
+              "批量测试完成：{{operationalCount}} 个正常，{{degradedCount}} 个较慢",
+          }),
+          { closeButton: true },
+        );
+      } else {
+        toast.warning(
+          t("streamCheck.bulkPartial", {
+            operationalCount,
+            degradedCount,
+            failedCount,
+            defaultValue:
+              "批量测试完成：{{operationalCount}} 个正常，{{degradedCount}} 个较慢，{{failedCount}} 个失败",
+          }),
+          { closeButton: true },
+        );
+      }
+
+      return nextResults;
+    } catch (error) {
+      toast.error(
+        t("streamCheck.bulkError", {
+          error: String(error),
+          defaultValue: "批量测试失败：{{error}}",
+        }),
+      );
+      return {};
+    } finally {
+      setIsCheckingAll(false);
+      setCheckingIds(new Set());
+    }
+  }, [appId, resetCircuitBreaker, t]);
+
+  return { checkProvider, checkAllProviders, isChecking, isCheckingAll };
 }

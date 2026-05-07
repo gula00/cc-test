@@ -7,6 +7,7 @@ import type {
 } from "@dnd-kit/core";
 import type { Provider } from "@/types";
 import type { AppId } from "@/lib/api";
+import type { StreamCheckResult } from "@/lib/api/model-test";
 import { cn } from "@/lib/utils";
 import { ProviderActions } from "@/components/providers/ProviderActions";
 import { ProviderIcon } from "@/components/ProviderIcon";
@@ -17,6 +18,7 @@ import CodexOauthQuotaFooter from "@/components/CodexOauthQuotaFooter";
 import { PROVIDER_TYPES } from "@/config/constants";
 import { isHermesReadOnlyProvider } from "@/config/hermesProviderPresets";
 import { ProviderHealthBadge } from "@/components/providers/ProviderHealthBadge";
+import { HealthStatusIndicator } from "@/components/providers/HealthStatusIndicator";
 import { FailoverPriorityBadge } from "@/components/providers/FailoverPriorityBadge";
 import { extractCodexBaseUrl } from "@/utils/providerConfigUtils";
 import { useProviderHealth } from "@/lib/query/failover";
@@ -47,6 +49,7 @@ interface ProviderCardProps {
   onTest?: (provider: Provider) => void;
   onOpenTerminal?: (provider: Provider) => void;
   isTesting?: boolean;
+  streamCheckResult?: StreamCheckResult;
   isProxyRunning: boolean;
   isProxyTakeover?: boolean; // 代理接管模式（Live配置已被接管，切换为热切换）
   dragHandleProps?: DragHandleProps;
@@ -135,6 +138,7 @@ export function ProviderCard({
   onTest,
   onOpenTerminal,
   isTesting,
+  streamCheckResult,
   isProxyRunning,
   isProxyTakeover = false,
   dragHandleProps,
@@ -246,6 +250,22 @@ export function ProviderCard({
     (!isAnyOmo &&
       !isProxyTakeover &&
       (isActiveProvider || hasPersistentConfigHighlight));
+  const streamCheckBorderClass =
+    streamCheckResult?.status === "operational"
+      ? "border-emerald-500/60 shadow-sm shadow-emerald-500/10"
+      : streamCheckResult?.status === "degraded"
+        ? "border-yellow-500/70 shadow-sm shadow-yellow-500/10"
+        : streamCheckResult?.status === "failed"
+          ? "border-red-500/70 shadow-sm shadow-red-500/10"
+          : undefined;
+  const streamCheckGradientClass =
+    streamCheckResult?.status === "operational"
+      ? "from-emerald-500/10"
+      : streamCheckResult?.status === "degraded"
+        ? "from-yellow-500/10"
+        : streamCheckResult?.status === "failed"
+          ? "from-red-500/10"
+          : undefined;
 
   return (
     <div
@@ -258,6 +278,7 @@ export function ProviderCard({
         shouldUseGreen &&
           "border-emerald-500/60 shadow-sm shadow-emerald-500/10",
         shouldUseBlue && "border-blue-500/60 shadow-sm shadow-blue-500/10",
+        streamCheckBorderClass,
         !(isActiveProvider || hasPersistentConfigHighlight) &&
           "hover:shadow-sm",
         dragHandleProps?.isDragging &&
@@ -269,8 +290,12 @@ export function ProviderCard({
           "absolute inset-0 bg-gradient-to-r to-transparent transition-opacity duration-500 pointer-events-none",
           shouldUseGreen && "from-emerald-500/10",
           shouldUseBlue && "from-blue-500/10",
-          !shouldUseGreen && !shouldUseBlue && "from-primary/10",
-          isActiveProvider || hasPersistentConfigHighlight
+          streamCheckGradientClass,
+          !shouldUseGreen &&
+            !shouldUseBlue &&
+            !streamCheckResult &&
+            "from-primary/10",
+          isActiveProvider || hasPersistentConfigHighlight || streamCheckResult
             ? "opacity-100"
             : "opacity-0",
         )}
@@ -324,6 +349,14 @@ export function ProviderCard({
                 />
               )}
 
+              {streamCheckResult && (
+                <HealthStatusIndicator
+                  status={streamCheckResult.status}
+                  responseTimeMs={streamCheckResult.responseTimeMs}
+                  className="rounded-full bg-background/70 px-2 py-1"
+                />
+              )}
+
               {isAutoFailoverEnabled &&
                 isInFailoverQueue &&
                 failoverPriority && (
@@ -372,6 +405,16 @@ export function ProviderCard({
                 <span className="truncate">{displayUrl}</span>
               </button>
             )}
+
+            {streamCheckResult?.status === "failed" &&
+              streamCheckResult.message && (
+                <div className="max-w-[min(72vw,42rem)] whitespace-pre-wrap break-all rounded-md border border-red-500/20 bg-red-500/10 px-2 py-1 text-xs text-red-700 dark:text-red-300">
+                  {t("provider.testFailedDetail", {
+                    message: streamCheckResult.message,
+                    defaultValue: "测试失败：{{message}}",
+                  })}
+                </div>
+              )}
           </div>
         </div>
 

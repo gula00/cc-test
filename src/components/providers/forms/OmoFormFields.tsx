@@ -302,6 +302,21 @@ export function mergeCustomModelsIntoStore(
   return updated;
 }
 
+export function hasDuplicateCustomModelKey(
+  key: string,
+  builtinKeys: Set<string>,
+  customs: CustomModelItem[],
+  currentIndex: number,
+): boolean {
+  const normalizedKey = key.trim();
+  if (!normalizedKey) return false;
+  if (builtinKeys.has(normalizedKey)) return true;
+
+  return customs.some(
+    (item, index) => index !== currentIndex && item.key.trim() === normalizedKey,
+  );
+}
+
 export function OmoFormFields({
   modelOptions,
   modelVariantsMap = {},
@@ -956,6 +971,27 @@ export function OmoFormFields({
     const isExpanded = expanded[key] ?? false;
 
     const updateCustom = (patch: Partial<CustomModelItem>) => {
+      if (typeof patch.key === "string") {
+        const nextKey = patch.key.trim();
+        if (
+          nextKey &&
+          hasDuplicateCustomModelKey(
+            nextKey,
+            isAgent ? builtinAgentKeys : BUILTIN_CATEGORY_KEYS,
+            customs,
+            index,
+          )
+        ) {
+          toast.error(
+            t("omo.duplicateKey", {
+              key: nextKey,
+              defaultValue: 'Key "{{key}}" already exists',
+            }),
+          );
+          return;
+        }
+      }
+
       const next = [...customs];
       next[index] = { ...next[index], ...patch };
       setCustoms(next);
