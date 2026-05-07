@@ -7,6 +7,7 @@ use crate::services::stream_check::{
     HealthStatus, StreamCheckConfig, StreamCheckResult, StreamCheckService,
 };
 use crate::store::AppState;
+use crate::proxy::providers::get_adapter;
 use serde::Serialize;
 use serde_json::{json, Value};
 use std::collections::HashSet;
@@ -19,19 +20,37 @@ pub async fn stream_check_provider(
     copilot_state: State<'_, CopilotAuthState>,
     app_type: AppType,
     provider_id: String,
+    override_model: Option<String>,
 ) -> Result<StreamCheckResult, AppError> {
     let config = state.db.get_stream_check_config()?;
+    let override_model = override_model
+        .as_deref()
+        .map(str::trim)
+        .filter(|model| !model.is_empty())
+        .map(str::to_string);
 
     let providers = state.db.get_all_providers(app_type.as_str())?;
     let provider = providers
         .get(&provider_id)
         .ok_or_else(|| AppError::Message(format!("供应商 {provider_id} 不存在")))?;
 
-    let auth_override = resolve_copilot_auth_override(provider, &copilot_state).await?;
-    let base_url_override = resolve_copilot_base_url_override(provider, &copilot_state).await?;
+    let mut provider_for_check = provider.clone();
+    if let Some(model) = override_model {
+        let meta = provider_for_check
+            .meta
+            .get_or_insert_with(crate::provider::ProviderMeta::default);
+        let mut test_config = meta.test_config.clone().unwrap_or_default();
+        test_config.enabled = true;
+        test_config.test_model = Some(model);
+        meta.test_config = Some(test_config);
+    }
+
+    let auth_override = resolve_copilot_auth_override(&provider_for_check, &copilot_state).await?;
+    let base_url_override =
+        resolve_copilot_base_url_override(&provider_for_check, &copilot_state).await?;
     let claude_api_format_override = resolve_claude_api_format_override(
         &app_type,
-        provider,
+        &provider_for_check,
         &config,
         &copilot_state,
         auth_override.as_ref(),
@@ -39,7 +58,7 @@ pub async fn stream_check_provider(
     .await?;
     let result = StreamCheckService::check_with_retry(
         &app_type,
-        provider,
+        &provider_for_check,
         &config,
         auth_override,
         base_url_override,
@@ -171,6 +190,13 @@ pub struct Ipv4CodexPromptTestResult {
     pub response_text: String,
 }
 
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProviderPromptTestResult {
+    pub model_used: String,
+    pub response_text: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct Ipv4ModelCandidate {
     id: String,
@@ -275,6 +301,112 @@ pub async fn test_ipv4_codex_prompt(
     ))
 }
 
+#[tauri::command(rename_all = "camelCase")]
+pub async fn test_provider_prompt(
+    state: State<'_, AppState>,
+    app_type: AppType,
+    provider_id: String,
+    #[allow(non_snake_case)] overrideModel: Option<String>,
+) -> Result<ProviderPromptTestResult, AppError> {
+    if app_type != AppType::Codex {
+        return Err(AppError::Message(
+            "Provider prompt test currently supports Codex providers only".to_string(),
+        ));
+    }
+
+    let config = state.db.get_stream_check_config()?;
+    let providers = state.db.get_all_providers(app_type.as_str())?;
+    let provider = providers
+        .get(&provider_id)
+        .ok_or_else(|| AppError::Message(format!("Provider {provider_id} not found")))?;
+
+    let prompt = config.test_prompt.trim();
+    if prompt.is_empty() {
+        return Err(AppError::Message("Test prompt is required".to_string()));
+    }
+
+    let requested_model = overrideModel
+        .as_deref()
+        .map(str::trim)
+        .filter(|model| !model.is_empty())
+        .map(str::to_string)
+        .unwrap_or_else(|| {
+            StreamCheckService::resolve_effective_test_model(&app_type, provider, &config)
+        });
+    let (model_used, reasoning_effort) = parse_model_with_effort(&requested_model);
+
+    if model_used.is_empty() {
+        return Err(AppError::Message("Codex test model is required".to_string()));
+    }
+
+    let adapter = get_adapter(&app_type);
+    let base_url = adapter
+        .extract_base_url(provider)
+        .map_err(|e| AppError::Message(format!("Failed to extract base_url: {e}")))?;
+    let auth = adapter
+        .extract_auth(provider)
+        .ok_or_else(|| AppError::Message("API Key not found".to_string()))?;
+
+    let mut body = json!({
+        "model": model_used,
+        "input": [{ "role": "user", "content": prompt }],
+        "stream": false
+    });
+
+    if let Some(effort) = reasoning_effort {
+        body["reasoning"] = json!({ "effort": effort });
+    }
+
+    let client = crate::proxy::http_client::get();
+    let timeout = std::time::Duration::from_secs(config.timeout_secs);
+    let urls = resolve_codex_responses_urls(&base_url, provider);
+
+    for (index, url) in urls.iter().enumerate() {
+        let response = client
+            .post(url)
+            .header("authorization", format!("Bearer {}", auth.api_key))
+            .header("content-type", "application/json")
+            .header("accept", "application/json")
+            .header("accept-encoding", "identity")
+            .header(
+                "user-agent",
+                format!(
+                    "codex_cli_rs/0.80.0 ({} 15.7.2; {}) Terminal",
+                    os_name(),
+                    arch_name()
+                ),
+            )
+            .header("originator", "codex_cli_rs")
+            .timeout(timeout)
+            .json(&body)
+            .send()
+            .await
+            .map_err(map_request_error)?;
+
+        let status = response.status().as_u16();
+        let response_text = response.text().await.unwrap_or_default();
+
+        if !(200..300).contains(&status) {
+            if index == 0 && status == 404 && urls.len() > 1 {
+                continue;
+            }
+            return Err(http_status_error(status, response_text));
+        }
+
+        let parsed: Value = serde_json::from_str(&response_text)
+            .map_err(|e| AppError::Message(format!("Failed to parse response JSON: {e}")))?;
+
+        return Ok(ProviderPromptTestResult {
+            model_used,
+            response_text: extract_response_text(&parsed).unwrap_or(response_text),
+        });
+    }
+
+    Err(AppError::Message(
+        "No valid Codex responses endpoint found".to_string(),
+    ))
+}
+
 async fn resolve_ipv4_test_model(
     target: &str,
     api_key: &str,
@@ -350,6 +482,27 @@ fn parse_model_with_effort(model: &str) -> (String, Option<String>) {
     }
 
     (model.trim().to_string(), None)
+}
+
+fn resolve_codex_responses_urls(
+    base_url: &str,
+    provider: &crate::provider::Provider,
+) -> Vec<String> {
+    let is_full_url = provider
+        .meta
+        .as_ref()
+        .and_then(|meta| meta.is_full_url)
+        .unwrap_or(false);
+    if is_full_url {
+        return vec![base_url.to_string()];
+    }
+
+    let base = base_url.trim_end_matches('/');
+    if base.ends_with("/v1") {
+        vec![format!("{base}/responses")]
+    } else {
+        vec![format!("{base}/responses"), format!("{base}/v1/responses")]
+    }
 }
 
 fn extract_model_candidates(value: &Value) -> Vec<Ipv4ModelCandidate> {

@@ -1,4 +1,4 @@
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { FormLabel } from "@/components/ui/form";
 import { Download, Info, Loader2 } from "lucide-react";
@@ -43,6 +43,7 @@ interface GeminiFormFieldsProps {
   shouldShowModelField: boolean;
   model: string;
   onModelChange: (value: string) => void;
+  onAvailableModelsChange?: (models: FetchedModel[]) => void;
 
   // Speed Test Endpoints
   speedTestEndpoints: EndpointCandidate[];
@@ -69,12 +70,18 @@ export function GeminiFormFields({
   shouldShowModelField,
   model,
   onModelChange,
+  onAvailableModelsChange,
   speedTestEndpoints,
 }: GeminiFormFieldsProps) {
   const { t } = useTranslation();
 
   const [fetchedModels, setFetchedModels] = useState<FetchedModel[]>([]);
   const [isFetchingModels, setIsFetchingModels] = useState(false);
+
+  useEffect(() => {
+    setFetchedModels([]);
+    onAvailableModelsChange?.([]);
+  }, [baseUrl, apiKey, onAvailableModelsChange]);
 
   const handleFetchModels = useCallback(() => {
     if (!baseUrl || !apiKey) {
@@ -88,6 +95,7 @@ export function GeminiFormFields({
     fetchModelsForConfig(baseUrl, apiKey)
       .then((models) => {
         setFetchedModels(models);
+        onAvailableModelsChange?.(models);
         if (models.length === 0) {
           toast.info(t("providerForm.fetchModelsEmpty"));
         } else {
@@ -101,7 +109,7 @@ export function GeminiFormFields({
         showFetchModelsError(err, t);
       })
       .finally(() => setIsFetchingModels(false));
-  }, [baseUrl, apiKey, t]);
+  }, [baseUrl, apiKey, onAvailableModelsChange, t]);
 
   // 检测是否为 Google 官方（使用 OAuth）
   const isGoogleOfficial =

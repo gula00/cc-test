@@ -33,6 +33,13 @@ export interface Ipv4CodexPromptTestResult {
   responseText: string;
 }
 
+export interface ProviderPromptTestResult {
+  modelUsed: string;
+  responseText: string;
+  responseTimeMs?: number;
+  message?: string;
+}
+
 // ===== 流式健康检查 API =====
 
 /**
@@ -41,8 +48,9 @@ export interface Ipv4CodexPromptTestResult {
 export async function streamCheckProvider(
   appType: AppId,
   providerId: string,
+  overrideModel?: string,
 ): Promise<StreamCheckResult> {
-  return invoke("stream_check_provider", { appType, providerId });
+  return invoke("stream_check_provider", { appType, providerId, overrideModel });
 }
 
 /**
@@ -81,6 +89,18 @@ export async function testIpv4CodexPrompt(
     ipv4,
     apiKey,
     config,
+    overrideModel,
+  });
+}
+
+export async function testProviderPrompt(
+  appType: AppId,
+  providerId: string,
+  overrideModel?: string,
+): Promise<ProviderPromptTestResult> {
+  return invoke("test_provider_prompt", {
+    appType,
+    providerId,
     overrideModel,
   });
 }

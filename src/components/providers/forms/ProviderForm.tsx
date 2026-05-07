@@ -103,6 +103,7 @@ import { HERMES_DEFAULT_CONFIG } from "./hooks/useHermesFormState";
 import { resolveManagedAccountId } from "@/lib/authBinding";
 import { useOpenClawLiveProviderIds } from "@/hooks/useOpenClaw";
 import { useHermesLiveProviderIds } from "@/hooks/useHermes";
+import type { FetchedModel } from "@/lib/api/model-fetch";
 
 type PresetEntry = {
   id: string;
@@ -200,6 +201,9 @@ export function ProviderForm({
   const [testConfig, setTestConfig] = useState<ProviderTestConfig>(
     () => initialData?.meta?.testConfig ?? { enabled: false },
   );
+  const [availableTestModels, setAvailableTestModels] = useState<
+    FetchedModel[]
+  >([]);
   const [pricingConfig, setPricingConfig] = useState<{
     enabled: boolean;
     costMultiplier?: string;
@@ -236,6 +240,7 @@ export function ProviderForm({
       supportsFullUrl ? (initialData?.meta?.isFullUrl ?? false) : false,
     );
     setTestConfig(initialData?.meta?.testConfig ?? { enabled: false });
+    setAvailableTestModels([]);
     setPricingConfig({
       enabled:
         initialData?.meta?.costMultiplier !== undefined ||
@@ -1803,6 +1808,7 @@ export function ProviderForm({
               defaultSonnetModel={defaultSonnetModel}
               defaultOpusModel={defaultOpusModel}
               onModelChange={handleModelChange}
+              onAvailableModelsChange={setAvailableTestModels}
               speedTestEndpoints={speedTestEndpoints}
               apiFormat={localApiFormat}
               onApiFormatChange={handleApiFormatChange}
@@ -1838,6 +1844,7 @@ export function ProviderForm({
               shouldShowModelField={category !== "official"}
               modelName={codexModelName}
               onModelNameChange={handleCodexModelNameChange}
+              onAvailableModelsChange={setAvailableTestModels}
               speedTestEndpoints={speedTestEndpoints}
             />
           )}
@@ -1867,6 +1874,7 @@ export function ProviderForm({
               shouldShowModelField={true}
               model={geminiModel}
               onModelChange={handleGeminiModelChange}
+              onAvailableModelsChange={setAvailableTestModels}
               speedTestEndpoints={speedTestEndpoints}
             />
           )}
@@ -2103,8 +2111,12 @@ export function ProviderForm({
             appId !== "openclaw" &&
             appId !== "hermes" && (
               <ProviderAdvancedConfig
+                appId={appId}
+                providerId={providerId}
+                providerName={initialData?.name ?? form.getValues("name")}
                 testConfig={testConfig}
                 pricingConfig={pricingConfig}
+                availableModels={availableTestModels}
                 onTestConfigChange={setTestConfig}
                 onPricingConfigChange={setPricingConfig}
               />

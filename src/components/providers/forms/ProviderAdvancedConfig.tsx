@@ -1,9 +1,17 @@
 import { useTranslation } from "react-i18next";
 import { useState, useEffect } from "react";
-import { ChevronDown, ChevronRight, FlaskConical, Coins } from "lucide-react";
+import {
+  ChevronDown,
+  ChevronRight,
+  Coins,
+  FlaskConical,
+  Loader2,
+} from "lucide-react";
+import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
+import { Badge } from "@/components/ui/badge";
 import {
   Select,
   SelectContent,
@@ -13,6 +21,9 @@ import {
 } from "@/components/ui/select";
 import { cn } from "@/lib/utils";
 import type { ProviderTestConfig } from "@/types";
+import type { FetchedModel } from "@/lib/api/model-fetch";
+import { streamCheckProvider, type StreamCheckResult } from "@/lib/api/model-test";
+import type { AppId } from "@/lib/api";
 
 export type PricingModelSourceOption = "inherit" | "request" | "response";
 
@@ -23,15 +34,23 @@ interface ProviderPricingConfig {
 }
 
 interface ProviderAdvancedConfigProps {
+  appId: AppId;
+  providerId?: string;
+  providerName?: string;
   testConfig: ProviderTestConfig;
   pricingConfig: ProviderPricingConfig;
+  availableModels?: FetchedModel[];
   onTestConfigChange: (config: ProviderTestConfig) => void;
   onPricingConfigChange: (config: ProviderPricingConfig) => void;
 }
 
 export function ProviderAdvancedConfig({
+  appId,
+  providerId,
+  providerName,
   testConfig,
   pricingConfig,
+  availableModels = [],
   onTestConfigChange,
   onPricingConfigChange,
 }: ProviderAdvancedConfigProps) {
@@ -40,6 +59,9 @@ export function ProviderAdvancedConfig({
   const [isPricingConfigOpen, setIsPricingConfigOpen] = useState(
     pricingConfig.enabled,
   );
+  const [isTesting, setIsTesting] = useState(false);
+  const [testResult, setTestResult] = useState<StreamCheckResult | null>(null);
+  const [testError, setTestError] = useState<string | null>(null);
 
   useEffect(() => {
     setIsTestConfigOpen(testConfig.enabled);
@@ -48,6 +70,32 @@ export function ProviderAdvancedConfig({
   useEffect(() => {
     setIsPricingConfigOpen(pricingConfig.enabled);
   }, [pricingConfig.enabled]);
+
+  const selectedTestModel = testConfig.testModel?.trim() || "";
+
+  const handleTestReturn = async () => {
+    if (!providerId || isTesting) return;
+
+    setIsTesting(true);
+    setTestResult(null);
+    setTestError(null);
+
+    try {
+      const result = await streamCheckProvider(
+        appId,
+        providerId,
+        selectedTestModel || undefined,
+      );
+      setTestResult(result);
+      if (!result.success) {
+        setTestError(result.message);
+      }
+    } catch (error) {
+      setTestError(String(error));
+    } finally {
+      setIsTesting(false);
+    }
+  };
 
   return (
     <div className="space-y-4">
@@ -98,7 +146,7 @@ export function ProviderAdvancedConfig({
           className={cn(
             "overflow-hidden transition-all duration-200",
             isTestConfigOpen
-              ? "max-h-[500px] opacity-100"
+              ? "max-h-[900px] opacity-100"
               : "max-h-0 opacity-0",
           )}
         >
@@ -130,6 +178,67 @@ export function ProviderAdvancedConfig({
                   })}
                   disabled={!testConfig.enabled}
                 />
+                <p className="text-xs text-muted-foreground">
+                  {selectedTestModel
+                    ? t("providerAdvanced.selectedTestModel", {
+                        model: selectedTestModel,
+                        defaultValue: "当前选择：{{model}}",
+                      })
+                    : t("providerAdvanced.selectedTestModelAuto", {
+                        defaultValue: "当前选择：自动",
+                      })}
+                </p>
+                <div className="space-y-2">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className="h-8"
+                    onClick={handleTestReturn}
+                    disabled={!providerId || isTesting}
+                    title={
+                      providerId
+                        ? undefined
+                        : t("providerAdvanced.testReturnNeedSave", {
+                            defaultValue: "保存供应商后才能测试",
+                          })
+                    }
+                  >
+                    {isTesting && (
+                      <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" />
+                    )}
+                    {t("providerAdvanced.testReturn", {
+                      defaultValue: "测试返回",
+                    })}
+                  </Button>
+                  {(testResult || testError) && (
+                    <div
+                      className={cn(
+                        "rounded-md border px-3 py-2 text-xs",
+                        testResult?.success
+                          ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300"
+                          : "border-destructive/30 bg-destructive/10 text-destructive",
+                      )}
+                    >
+                      {testResult?.success
+                        ? t("providerAdvanced.testReturnSuccess", {
+                            providerName:
+                              providerName ||
+                              t("providerAdvanced.thisProvider", {
+                                defaultValue: "此供应商",
+                              }),
+                            model: testResult.modelUsed,
+                            responseTimeMs: testResult.responseTimeMs,
+                            defaultValue:
+                              "{{providerName}} 返回成功：{{model}} ({{responseTimeMs}}ms)",
+                          })
+                        : t("providerAdvanced.testReturnFailed", {
+                            message: testError || testResult?.message || "",
+                            defaultValue: "测试失败：{{message}}",
+                          })}
+                    </div>
+                  )}
+                </div>
               </div>
               <div className="space-y-2">
                 <Label htmlFor="test-timeout">
@@ -223,6 +332,76 @@ export function ProviderAdvancedConfig({
                 />
               </div>
             </div>
+            {availableModels.length > 0 && (
+              <div className="space-y-2">
+                <div className="flex items-center justify-between gap-3">
+                  <div className="space-y-1">
+                    <Label>
+                      {t("providerAdvanced.availableModels", {
+                        defaultValue: "可用模型列表",
+                      })}
+                    </Label>
+                    <p className="text-xs text-muted-foreground">
+                      {t("providerAdvanced.availableModelsHint", {
+                        defaultValue:
+                          "点击模型会设置为此供应商的测试模型，保存后列表里的测试会使用它。",
+                      })}
+                    </p>
+                  </div>
+                  <Badge variant="outline" className="shrink-0">
+                    {t("providerAdvanced.availableModelsCount", {
+                      count: availableModels.length,
+                      defaultValue: "{{count}} 个模型",
+                    })}
+                  </Badge>
+                </div>
+                <div className="grid max-h-80 grid-cols-1 gap-2 overflow-y-auto rounded-lg border bg-background p-2 md:grid-cols-2 xl:grid-cols-3">
+                  {availableModels.map((model) => {
+                    const isSelected = selectedTestModel === model.id;
+                    return (
+                      <button
+                        key={`${model.ownedBy ?? "unknown"}:${model.id}`}
+                        type="button"
+                        className={cn(
+                          "flex min-h-16 w-full flex-col items-start justify-between gap-2 rounded-md border px-3 py-2 text-left text-sm transition-colors hover:border-primary/40 hover:bg-muted/50",
+                          isSelected &&
+                            "border-primary/50 bg-primary/10 hover:bg-primary/10",
+                        )}
+                        onClick={() => {
+                          onTestConfigChange({
+                            ...testConfig,
+                            enabled: true,
+                            testModel: isSelected ? undefined : model.id,
+                          });
+                          setIsTestConfigOpen(true);
+                        }}
+                      >
+                        <span className="w-full truncate font-medium">
+                          {model.id}
+                        </span>
+                        <span className="flex w-full items-center gap-2">
+                          {model.ownedBy && (
+                            <Badge
+                              variant="outline"
+                              className="max-w-32 truncate text-[10px]"
+                            >
+                              {model.ownedBy}
+                            </Badge>
+                          )}
+                          {isSelected && (
+                            <Badge variant="secondary" className="text-[10px]">
+                              {t("providerAdvanced.selected", {
+                                defaultValue: "已选择",
+                              })}
+                            </Badge>
+                          )}
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
           </div>
         </div>
       </div>

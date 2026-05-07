@@ -118,6 +118,7 @@ interface ClaudeFormFieldsProps {
       | "ANTHROPIC_DEFAULT_OPUS_MODEL",
     value: string,
   ) => void;
+  onAvailableModelsChange?: (models: FetchedModel[]) => void;
 
   // Speed Test Endpoints
   speedTestEndpoints: EndpointCandidate[];
@@ -173,6 +174,7 @@ export function ClaudeFormFields({
   defaultSonnetModel,
   defaultOpusModel,
   onModelChange,
+  onAvailableModelsChange,
   speedTestEndpoints,
   apiFormat,
   onApiFormatChange,
@@ -207,6 +209,11 @@ export function ClaudeFormFields({
   const [fetchedModels, setFetchedModels] = useState<FetchedModel[]>([]);
   const [isFetchingModels, setIsFetchingModels] = useState(false);
 
+  useEffect(() => {
+    setFetchedModels([]);
+    onAvailableModelsChange?.([]);
+  }, [baseUrl, apiKey, isFullUrl, onAvailableModelsChange]);
+
   const handleFetchModels = useCallback(() => {
     if (!baseUrl || !apiKey) {
       showFetchModelsError(null, t, {
@@ -227,6 +234,7 @@ export function ClaudeFormFields({
     fetchModelsForConfig(baseUrl, apiKey, isFullUrl, modelsUrl)
       .then((models) => {
         setFetchedModels(models);
+        onAvailableModelsChange?.(models);
         if (models.length === 0) {
           toast.info(t("providerForm.fetchModelsEmpty"));
         } else {
@@ -240,13 +248,14 @@ export function ClaudeFormFields({
         showFetchModelsError(err, t);
       })
       .finally(() => setIsFetchingModels(false));
-  }, [baseUrl, apiKey, isFullUrl, t]);
+  }, [baseUrl, apiKey, isFullUrl, onAvailableModelsChange, t]);
 
   // 当 Copilot 预设且已认证时，加载可用模型
   useEffect(() => {
     // 如果不是 Copilot 预设或未认证，清空模型列表
     if (!isCopilotPreset || !isCopilotAuthenticated) {
       setCopilotModels([]);
+      onAvailableModelsChange?.([]);
       setModelsLoading(false);
       return;
     }
@@ -259,7 +268,15 @@ export function ClaudeFormFields({
 
     fetchModels
       .then((models) => {
-        if (!cancelled) setCopilotModels(models);
+        if (!cancelled) {
+          setCopilotModels(models);
+          onAvailableModelsChange?.(
+            models.map((model) => ({
+              id: model.id,
+              ownedBy: model.vendor || "Copilot",
+            })),
+          );
+        }
       })
       .catch((err) => {
         console.warn("[Copilot] Failed to fetch models:", err);
@@ -277,7 +294,12 @@ export function ClaudeFormFields({
     return () => {
       cancelled = true;
     };
-  }, [isCopilotPreset, isCopilotAuthenticated, selectedGitHubAccountId]);
+  }, [
+    isCopilotPreset,
+    isCopilotAuthenticated,
+    onAvailableModelsChange,
+    selectedGitHubAccountId,
+  ]);
 
   // 模型输入框：支持手动输入 + 下拉选择
   const renderModelInput = (

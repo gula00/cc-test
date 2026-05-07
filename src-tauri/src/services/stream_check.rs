@@ -1360,6 +1360,10 @@ impl StreamCheckService {
         provider: &Provider,
         config: &StreamCheckConfig,
     ) -> String {
+        if let Some(model) = Self::extract_provider_test_model(provider) {
+            return model;
+        }
+
         match app_type {
             AppType::Claude => Self::extract_env_model(provider, "ANTHROPIC_MODEL")
                 .unwrap_or_else(|| config.claude_model.clone()),
@@ -1379,6 +1383,17 @@ impl StreamCheckService {
                 Self::extract_openclaw_model(provider).unwrap_or_else(|| "gpt-4o".to_string())
             }
         }
+    }
+
+    fn extract_provider_test_model(provider: &Provider) -> Option<String> {
+        provider
+            .meta
+            .as_ref()
+            .and_then(|meta| meta.test_config.as_ref())
+            .filter(|config| config.enabled)
+            .and_then(|config| config.test_model.as_deref())
+            .map(|model| model.trim().to_string())
+            .filter(|model| !model.is_empty())
     }
 
     fn extract_opencode_model(provider: &Provider) -> Option<String> {
