@@ -13,19 +13,12 @@ import {
   type CSSProperties,
 } from "react";
 import { AnimatePresence, motion } from "framer-motion";
-import {
-  AlertTriangle,
-  Download,
-  Loader2,
-  Search,
-  X,
-} from "lucide-react";
+import { AlertTriangle, Search, X } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import type { Provider } from "@/types";
 import type { AppId } from "@/lib/api";
-import type { StreamCheckResult } from "@/lib/api/model-test";
 import { providersApi } from "@/lib/api/providers";
 import { useDragSort } from "@/hooks/useDragSort";
 import {
@@ -99,8 +92,7 @@ export function ProviderList({
   onSetAsDefault,
 }: ProviderListProps) {
   const { t } = useTranslation();
-  const { checkProvider, checkAllProviders, isChecking, isCheckingAll } =
-    useStreamCheck(appId);
+  const { checkProvider, isChecking } = useStreamCheck(appId);
   const { sortedProviders, sensors, handleDragEnd } = useDragSort(
     providers,
     appId,
@@ -203,10 +195,6 @@ export function ProviderList({
   const [showStreamCheckConfirm, setShowStreamCheckConfirm] = useState(false);
   const [pendingTestProvider, setPendingTestProvider] =
     useState<Provider | null>(null);
-  const [pendingBulkTest, setPendingBulkTest] = useState(false);
-  const [streamCheckResults, setStreamCheckResults] = useState<
-    Record<string, StreamCheckResult>
-  >({});
   const { data: claudeDesktopStatus } = useQuery({
     queryKey: ["claudeDesktopStatus"],
     queryFn: () => providersApi.getClaudeDesktopStatus(),
@@ -220,52 +208,17 @@ export function ProviderList({
     queryFn: () => settingsApi.get(),
   });
 
-  const runProviderTest = useCallback(
-    async (provider: Provider) => {
-      const result = await checkProvider(provider.id, provider.name);
-      if (result) {
-        setStreamCheckResults((prev) => ({
-          ...prev,
-          [provider.id]: result,
-        }));
-      }
-    },
-    [checkProvider],
-  );
-
   const handleTest = useCallback(
     (provider: Provider) => {
       if (!settings?.streamCheckConfirmed) {
-        setPendingBulkTest(false);
         setPendingTestProvider(provider);
         setShowStreamCheckConfirm(true);
       } else {
-        void runProviderTest(provider);
+        checkProvider(provider.id, provider.name);
       }
     },
-    [runProviderTest, settings?.streamCheckConfirmed],
+    [checkProvider, settings?.streamCheckConfirmed],
   );
-
-  const runAllProviderTests = useCallback(async () => {
-    const results = await checkAllProviders();
-    if (Object.keys(results).length > 0) {
-      setStreamCheckResults((prev) => ({
-        ...prev,
-        ...results,
-      }));
-    }
-  }, [checkAllProviders]);
-
-  const handleTestAll = useCallback(() => {
-    if (!settings?.streamCheckConfirmed) {
-      setPendingTestProvider(null);
-      setPendingBulkTest(true);
-      setShowStreamCheckConfirm(true);
-      return;
-    }
-
-    void runAllProviderTests();
-  }, [runAllProviderTests, settings?.streamCheckConfirmed]);
 
   const handleStreamCheckConfirm = async () => {
     setShowStreamCheckConfirm(false);
@@ -278,12 +231,8 @@ export function ProviderList({
     } catch (error) {
       console.error("Failed to save stream check confirmed:", error);
     }
-    if (pendingBulkTest) {
-      void runAllProviderTests();
-      setPendingBulkTest(false);
-      setPendingTestProvider(null);
-    } else if (pendingTestProvider) {
-      void runProviderTest(pendingTestProvider);
+    if (pendingTestProvider) {
+      checkProvider(pendingTestProvider.id, pendingTestProvider.name);
       setPendingTestProvider(null);
     }
   };
@@ -493,7 +442,6 @@ export function ProviderList({
                 onOpenTerminal={onOpenTerminal}
                 onTest={handleTest}
                 isTesting={isChecking(provider.id)}
-                streamCheckResult={streamCheckResults[provider.id]}
                 isProxyRunning={isProxyRunning}
                 isProxyTakeover={isProxyTakeover}
                 isAutoFailoverEnabled={isFailoverModeActive}
@@ -522,38 +470,6 @@ export function ProviderList({
 
   return (
     <div className="mt-4 space-y-4">
-      <div className="flex items-center justify-end">
-        <Button
-          type="button"
-          variant="outline"
-          size="sm"
-          onClick={handleTestAll}
-          disabled={isCheckingAll}
-          className="gap-2"
-        >
-          {isCheckingAll ? (
-            <Loader2 className="h-4 w-4 animate-spin" />
-          ) : null}
-          {t("provider.bulkTestAll", {
-            defaultValue: "一键全部测试",
-          })}
-        </Button>
-      </div>
-      {appId === "claude-desktop" && (
-        <div className="flex flex-wrap justify-end gap-2">
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => importMutation.mutate()}
-            disabled={importMutation.isPending}
-          >
-            <Download className="mr-2 h-4 w-4" />
-            {t("provider.importFromClaude", {
-              defaultValue: "从 Claude 导入兼容供应商",
-            })}
-          </Button>
-        </div>
-      )}
       {claudeDesktopStatusMessages.length > 0 && (
         <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-900 dark:text-amber-200">
           <div className="flex items-center gap-2 font-medium">
@@ -653,7 +569,6 @@ export function ProviderList({
         onCancel={() => {
           setShowStreamCheckConfirm(false);
           setPendingTestProvider(null);
-          setPendingBulkTest(false);
         }}
       />
     </div>
@@ -679,7 +594,6 @@ interface SortableProviderCardProps {
   onOpenTerminal?: (provider: Provider) => void;
   onTest?: (provider: Provider) => void;
   isTesting: boolean;
-  streamCheckResult?: StreamCheckResult;
   isProxyRunning: boolean;
   isProxyTakeover: boolean;
   isAutoFailoverEnabled: boolean;
@@ -711,7 +625,6 @@ function SortableProviderCard({
   onOpenTerminal,
   onTest,
   isTesting,
-  streamCheckResult,
   isProxyRunning,
   isProxyTakeover,
   isAutoFailoverEnabled,
@@ -759,7 +672,6 @@ function SortableProviderCard({
         onOpenTerminal={onOpenTerminal}
         onTest={onTest}
         isTesting={isTesting}
-        streamCheckResult={streamCheckResult}
         isProxyRunning={isProxyRunning}
         isProxyTakeover={isProxyTakeover}
         dragHandleProps={{
