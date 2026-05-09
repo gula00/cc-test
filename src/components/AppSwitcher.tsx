@@ -1,6 +1,7 @@
 import type { AppId } from "@/lib/api";
 import type { VisibleApps } from "@/types";
 import { ProviderIcon } from "@/components/ProviderIcon";
+import { ClaudeDesktopIcon } from "@/components/BrandIcons";
 import { cn } from "@/lib/utils";
 
 interface AppSwitcherProps {
@@ -72,11 +73,15 @@ export function AppSwitcher({
               : "text-muted-foreground hover:text-foreground hover:bg-background/50",
           )}
         >
-          <ProviderIcon
-            icon={appIconName[app]}
-            name={appDisplayName[app]}
-            size={iconSize}
-          />
+          {app === "claude-desktop" ? (
+            <ClaudeDesktopIcon size={iconSize} />
+          ) : (
+            <ProviderIcon
+              icon={appIconName[app]}
+              name={appDisplayName[app]}
+              size={iconSize}
+            />
+          )}
           <span
             className={cn(
               "transition-all duration-200 whitespace-nowrap overflow-hidden",

@@ -2,6 +2,7 @@ import React from "react";
 import type { AppId } from "@/lib/api/types";
 import {
   ClaudeIcon,
+  ClaudeDesktopIcon,
   CodexIcon,
   GeminiIcon,
   OpenClawIcon,
@@ -48,7 +49,7 @@ export const APP_ICON_MAP: Record<AppId, AppConfig> = {
   },
   "claude-desktop": {
     label: "Claude Desktop",
-    icon: <ClaudeIcon size={14} />,
+    icon: <ClaudeDesktopIcon size={14} />,
     activeClass:
       "bg-amber-500/10 ring-1 ring-amber-500/20 hover:bg-amber-500/20 text-amber-700 dark:text-amber-300",
     badgeClass:

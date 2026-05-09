@@ -22,6 +22,47 @@ export function ClaudeIcon({ size = 16, className = "" }: IconProps) {
   );
 }
 
+export function ClaudeDesktopIcon({ size = 16, className = "" }: IconProps) {
+  const badgeSize = Math.max(8, Math.round(size * 0.52));
+  const badgeOffset = Math.max(0, Math.round(size * 0.06));
+
+  return (
+    <span
+      className={`relative inline-flex items-center justify-center ${className}`}
+      style={{ width: size, height: size }}
+    >
+      <img
+        src={ClaudeSvg}
+        width={size}
+        height={size}
+        alt="Claude Desktop"
+        loading="lazy"
+      />
+      <span
+        className="absolute rounded-[3px] border border-white/90 bg-amber-500 text-white shadow-sm dark:border-neutral-900/80 dark:bg-amber-400"
+        style={{
+          width: badgeSize,
+          height: badgeSize,
+          right: -badgeOffset,
+          bottom: -badgeOffset,
+        }}
+      >
+        <svg
+          viewBox="0 0 24 24"
+          width={badgeSize}
+          height={badgeSize}
+          aria-hidden="true"
+        >
+          <path
+            fill="currentColor"
+            d="M5 6.75A1.75 1.75 0 0 1 6.75 5h10.5A1.75 1.75 0 0 1 19 6.75v7.5A1.75 1.75 0 0 1 17.25 16h-3.5l.75 1.5h1a.75.75 0 1 1 0 1.5h-7a.75.75 0 1 1 0-1.5h1l.75-1.5h-3.5A1.75 1.75 0 0 1 5 14.25v-7.5Zm1.5 0v7.5c0 .138.112.25.25.25h10.5a.25.25 0 0 0 .25-.25v-7.5a.25.25 0 0 0-.25-.25H6.75a.25.25 0 0 0-.25.25Z"
+          />
+        </svg>
+      </span>
+    </span>
+  );
+}
+
 export function CodexIcon({ size = 16, className = "" }: IconProps) {
   return (
     <img
