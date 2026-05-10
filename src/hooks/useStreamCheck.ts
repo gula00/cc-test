@@ -1,19 +1,25 @@
-import { useState, useCallback } from "react";
-import { toast } from "sonner";
-import { useTranslation } from "react-i18next";
+import { useCallback, useState } from "react";
 import {
-  streamCheckProvider,
   streamCheckAllProviders,
+  streamCheckProvider,
   type StreamCheckResult,
 } from "@/lib/api/model-test";
 import type { AppId } from "@/lib/api";
 import { useResetCircuitBreaker } from "@/lib/query/failover";
 
 export function useStreamCheck(appId: AppId) {
-  const { t } = useTranslation();
   const [checkingIds, setCheckingIds] = useState<Set<string>>(new Set());
   const [isCheckingAll, setIsCheckingAll] = useState(false);
   const resetCircuitBreaker = useResetCircuitBreaker();
+
+  const resetIfReachable = useCallback(
+    (providerId: string, result: StreamCheckResult) => {
+      if (result.status === "operational" || result.status === "degraded") {
+        resetCircuitBreaker.mutate({ providerId, appType: appId });
+      }
+    },
+    [appId, resetCircuitBreaker],
+  );
 
   const checkProvider = useCallback(
     async (
@@ -24,111 +30,15 @@ export function useStreamCheck(appId: AppId) {
 
       try {
         const result = await streamCheckProvider(appId, providerId);
-
-        if (result.status === "operational") {
-          toast.success(
-            t("streamCheck.operational", {
-              providerName: providerName,
-              responseTimeMs: result.responseTimeMs,
-              defaultValue: `${providerName} 运行正常 (${result.responseTimeMs}ms)`,
-            }),
-            { closeButton: true },
-          );
-
-          // 测试通过后重置熔断器状态
-          resetCircuitBreaker.mutate({ providerId, appType: appId });
-        } else if (result.status === "degraded") {
-          toast.warning(
-            t("streamCheck.degraded", {
-              providerName: providerName,
-              responseTimeMs: result.responseTimeMs,
-              defaultValue: `${providerName} 响应较慢 (${result.responseTimeMs}ms)`,
-            }),
-          );
-
-          // 降级状态也重置熔断器，因为至少能通信
-          resetCircuitBreaker.mutate({ providerId, appType: appId });
-        } else if (result.errorCategory === "modelNotFound") {
-          // 专门处理"模型不存在/已下架"：指向配置入口，比通用 404 文案更有指导性
-          toast.error(
-            t("streamCheck.modelNotFound", {
-              providerName: providerName,
-              model: result.modelUsed,
-              defaultValue: `${providerName} 测试模型 ${result.modelUsed} 不存在或已下架`,
-            }),
-            {
-              description: t("streamCheck.modelNotFoundHint", {
-                defaultValue: "",
-              }),
-              duration: 10000,
-              closeButton: true,
-            },
-          );
-        } else if (result.errorCategory === "quotaExceeded") {
-          toast.warning(
-            t("streamCheck.quotaExceeded", {
-              providerName: providerName,
-              defaultValue: `${providerName} Coding Plan quota has been exceeded`,
-            }),
-            {
-              description: t("streamCheck.quotaExceededHint", {
-                defaultValue: "",
-              }),
-              duration: 10000,
-              closeButton: true,
-            },
-          );
-        } else {
-          const httpStatus = result.httpStatus;
-          const hintKey = httpStatus
-            ? `streamCheck.httpHint.${httpStatus >= 500 ? "5xx" : httpStatus}`
-            : null;
-          const description =
-            (hintKey ? t(hintKey, { defaultValue: "" }) : "") || undefined;
-
-          // 401/403/400 = 检查被拒（供应商可能正常）；429/5xx = 临时问题
-          const isProbeRejection =
-            httpStatus != null &&
-            ([401, 403, 400, 429].includes(httpStatus) || httpStatus >= 500);
-
-          if (isProbeRejection) {
-            toast.warning(
-              t("streamCheck.rejected", {
-                providerName: providerName,
-                message: "",
-                defaultValue: `${providerName} 检查被拒: ${result.message}`,
-              }),
-              {
-                description: result.message || description,
-                duration: 12000,
-                closeButton: true,
-              },
-            );
-          } else {
-            toast.error(
-              t("streamCheck.failed", {
-                providerName: providerName,
-                message: "",
-                defaultValue: `${providerName} 检查失败: ${result.message}`,
-              }),
-              {
-                description: result.message || description,
-                duration: 12000,
-                closeButton: true,
-              },
-            );
-          }
-        }
-
+        resetIfReachable(providerId, result);
         return result;
-      } catch (e) {
-        toast.error(
-          t("streamCheck.error", {
-            providerName: providerName,
-            error: String(e),
-            defaultValue: `${providerName} 检查出错: ${String(e)}`,
-          }),
-        );
+      } catch (error) {
+        console.warn("[StreamCheck] Failed to check provider", {
+          appId,
+          providerId,
+          providerName,
+          error,
+        });
         return null;
       } finally {
         setCheckingIds((prev) => {
@@ -138,7 +48,7 @@ export function useStreamCheck(appId: AppId) {
         });
       }
     },
-    [appId, t, resetCircuitBreaker],
+    [appId, resetIfReachable],
   );
 
   const isChecking = useCallback(
@@ -155,59 +65,22 @@ export function useStreamCheck(appId: AppId) {
       const entries = await streamCheckAllProviders(appId);
       const nextResults = Object.fromEntries(entries);
 
-      let operationalCount = 0;
-      let degradedCount = 0;
-      let failedCount = 0;
-
       for (const [providerId, result] of entries) {
-        if (result.status === "operational") {
-          operationalCount += 1;
-          resetCircuitBreaker.mutate({ providerId, appType: appId });
-        } else if (result.status === "degraded") {
-          degradedCount += 1;
-          resetCircuitBreaker.mutate({ providerId, appType: appId });
-        } else {
-          failedCount += 1;
-        }
-      }
-
-      if (failedCount === 0) {
-        toast.success(
-          t("streamCheck.bulkSuccess", {
-            operationalCount,
-            degradedCount,
-            defaultValue:
-              "批量测试完成：{{operationalCount}} 个正常，{{degradedCount}} 个较慢",
-          }),
-          { closeButton: true },
-        );
-      } else {
-        toast.warning(
-          t("streamCheck.bulkPartial", {
-            operationalCount,
-            degradedCount,
-            failedCount,
-            defaultValue:
-              "批量测试完成：{{operationalCount}} 个正常，{{degradedCount}} 个较慢，{{failedCount}} 个失败",
-          }),
-          { closeButton: true },
-        );
+        resetIfReachable(providerId, result);
       }
 
       return nextResults;
     } catch (error) {
-      toast.error(
-        t("streamCheck.bulkError", {
-          error: String(error),
-          defaultValue: "批量测试失败：{{error}}",
-        }),
-      );
+      console.warn("[StreamCheck] Failed to check all providers", {
+        appId,
+        error,
+      });
       return {};
     } finally {
       setIsCheckingAll(false);
       setCheckingIds(new Set());
     }
-  }, [appId, resetCircuitBreaker, t]);
+  }, [appId, resetIfReachable]);
 
   return { checkProvider, checkAllProviders, isChecking, isCheckingAll };
 }

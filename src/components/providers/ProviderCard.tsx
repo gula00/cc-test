@@ -420,6 +420,15 @@ export function ProviderCard({
               </button>
             )}
 
+            {streamCheckResult?.modelUsed && (
+              <div className="text-xs text-muted-foreground">
+                {t("provider.testedModel", {
+                  model: streamCheckResult.modelUsed,
+                  defaultValue: "测得模型：{{model}}",
+                })}
+              </div>
+            )}
+
             {streamCheckResult?.status === "failed" &&
               streamCheckResult.message && (
                 <div className="max-w-[min(72vw,42rem)] whitespace-pre-wrap break-all rounded-md border border-red-500/20 bg-red-500/10 px-2 py-1 text-xs text-red-700 dark:text-red-300">

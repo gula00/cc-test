@@ -68,11 +68,7 @@ pub fn get_claude_api_format(provider: &Provider) -> &'static str {
         _ => false,
     };
 
-    if enabled {
-        "openai_chat"
-    } else {
-        "anthropic"
-    }
+    if enabled { "openai_chat" } else { "anthropic" }
 }
 
 pub fn claude_api_format_needs_transform(api_format: &str) -> bool {
@@ -84,7 +80,7 @@ pub fn claude_api_format_needs_transform(api_format: &str) -> bool {
 
 fn is_moonshot_or_kimi_identifier(value: &str) -> bool {
     let value = value.to_ascii_lowercase();
-    value.contains("moonshot") || value.contains("kimi")
+    value.contains("moonshot") || value.contains("kimi") || value.contains("deepseek")
 }
 
 fn should_preserve_reasoning_content_for_openai_chat(
@@ -1686,6 +1682,41 @@ mod tests {
         );
         let body = json!({
             "model": "kimi-k2.6",
+            "max_tokens": 64,
+            "messages": [{
+                "role": "assistant",
+                "content": [
+                    {"type": "thinking", "thinking": "I should call the tool."},
+                    {"type": "tool_use", "id": "call_123", "name": "get_weather", "input": {"location": "Tokyo"}}
+                ]
+            }]
+        });
+
+        let transformed =
+            transform_claude_request_for_api_format(body, &provider, "openai_chat", None, None)
+                .unwrap();
+
+        let msg = &transformed["messages"][0];
+        assert_eq!(msg["reasoning_content"], "I should call the tool.");
+        assert!(msg.get("tool_calls").is_some());
+    }
+
+    #[test]
+    fn test_transform_openai_chat_preserves_reasoning_content_for_deepseek_provider() {
+        let provider = create_provider_with_meta(
+            json!({
+                "env": {
+                    "ANTHROPIC_BASE_URL": "https://api.deepseek.com/v1",
+                    "ANTHROPIC_API_KEY": "test-key"
+                }
+            }),
+            ProviderMeta {
+                api_format: Some("openai_chat".to_string()),
+                ..Default::default()
+            },
+        );
+        let body = json!({
+            "model": "deepseek-v4-flash",
             "max_tokens": 64,
             "messages": [{
                 "role": "assistant",

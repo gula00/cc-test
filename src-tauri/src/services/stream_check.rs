@@ -17,7 +17,7 @@ use crate::proxy::providers::transform::anthropic_to_openai;
 use crate::proxy::providers::transform_gemini::anthropic_to_gemini;
 use crate::proxy::providers::transform_responses::anthropic_to_responses;
 use crate::proxy::providers::{
-    get_adapter, AuthInfo, AuthStrategy, ClaudeAdapter, ProviderAdapter,
+    AuthInfo, AuthStrategy, ClaudeAdapter, ProviderAdapter, get_adapter,
 };
 
 /// 健康状态枚举
@@ -57,7 +57,7 @@ impl Default for StreamCheckConfig {
             timeout_secs: 45,
             max_retries: 2,
             degraded_threshold_ms: 6000,
-            claude_model: "claude-haiku-4-5-20251001".to_string(),
+            claude_model: "opus-6".to_string(),
             codex_model: "gpt-5.4@low".to_string(),
             gemini_model: "gemini-3-flash-preview".to_string(),
             test_prompt: default_test_prompt(),
@@ -86,6 +86,9 @@ pub struct StreamCheckResult {
 pub struct StreamCheckService;
 
 impl StreamCheckService {
+    const CLAUDE_PRIMARY_TEST_MODEL: &'static str = "opus-6";
+    const CLAUDE_FALLBACK_TEST_MODEL: &'static str = "mimo-v2.5-pro";
+
     /// 执行流式健康检查（带重试）
     ///
     /// 如果 Provider 配置了单独的测试配置（meta.testConfig），则使用该配置覆盖全局配置
@@ -239,9 +242,10 @@ impl StreamCheckService {
         let model_to_test = Self::resolve_test_model(app_type, provider, config);
         let test_prompt = &config.test_prompt;
 
+        let mut model_tested = model_to_test.clone();
         let result = match app_type {
             AppType::Claude | AppType::ClaudeDesktop => {
-                Self::check_claude_stream(
+                let result = Self::check_claude_stream(
                     &client,
                     &base_url,
                     &auth,
@@ -252,7 +256,24 @@ impl StreamCheckService {
                     claude_api_format_override.as_deref(),
                     None,
                 )
-                .await
+                .await;
+                if Self::should_retry_claude_with_fallback(&model_to_test, &result) {
+                    model_tested = Self::CLAUDE_FALLBACK_TEST_MODEL.to_string();
+                    Self::check_claude_stream(
+                        &client,
+                        &base_url,
+                        &auth,
+                        Self::CLAUDE_FALLBACK_TEST_MODEL,
+                        test_prompt,
+                        request_timeout,
+                        provider,
+                        claude_api_format_override.as_deref(),
+                        None,
+                    )
+                    .await
+                } else {
+                    result
+                }
             }
             AppType::Codex => {
                 Self::check_codex_stream(
@@ -285,12 +306,29 @@ impl StreamCheckService {
         };
 
         let response_time = start.elapsed().as_millis() as u64;
+
         Ok(Self::build_stream_check_result(
             result,
             response_time,
             config.degraded_threshold_ms,
-            &model_to_test,
+            &model_tested,
         ))
+    }
+
+    fn should_retry_claude_with_fallback(
+        model: &str,
+        result: &Result<(u16, String), AppError>,
+    ) -> bool {
+        model.trim() == Self::CLAUDE_PRIMARY_TEST_MODEL && Self::is_model_not_found_result(result)
+    }
+
+    fn is_model_not_found_result(result: &Result<(u16, String), AppError>) -> bool {
+        match result {
+            Err(AppError::HttpStatus { status, body }) => {
+                Self::detect_error_category(*status, body) == Some("modelNotFound")
+            }
+            _ => false,
+        }
     }
 
     /// Claude 流式检查
@@ -305,6 +343,234 @@ impl StreamCheckService {
     /// 的 `settings_config.headers` 或 OpenCode 的 `settings_config.options.headers`
     /// 读取），在所有内置 header 之后追加，用于覆盖或补充（例如自定义 User-Agent）。
     #[allow(clippy::too_many_arguments)]
+    pub async fn test_claude_prompt(
+        base_url: &str,
+        auth: &AuthInfo,
+        model: &str,
+        test_prompt: &str,
+        timeout: std::time::Duration,
+        provider: &Provider,
+        claude_api_format_override: Option<&str>,
+    ) -> Result<(String, String), AppError> {
+        let base = base_url.trim_end_matches('/');
+        let is_github_copilot = auth.strategy == AuthStrategy::GitHubCopilot;
+        let api_format = provider
+            .meta
+            .as_ref()
+            .and_then(|m| m.api_format.as_deref())
+            .or_else(|| {
+                provider
+                    .settings_config
+                    .get("api_format")
+                    .and_then(|v| v.as_str())
+            })
+            .unwrap_or("anthropic");
+        let effective_api_format = claude_api_format_override.unwrap_or(api_format);
+        let is_full_url = provider
+            .meta
+            .as_ref()
+            .and_then(|meta| meta.is_full_url)
+            .unwrap_or(false);
+        let is_openai_chat = effective_api_format == "openai_chat";
+        let is_openai_responses = effective_api_format == "openai_responses";
+        let is_gemini_native = effective_api_format == "gemini_native";
+        let url = Self::resolve_claude_stream_url(
+            base,
+            auth.strategy,
+            effective_api_format,
+            is_full_url,
+            model,
+        );
+
+        let anthropic_body = json!({
+            "model": model,
+            "max_tokens": 256,
+            "messages": [{ "role": "user", "content": test_prompt }],
+            "stream": true
+        });
+        let body = if is_openai_responses {
+            anthropic_to_responses(
+                anthropic_body,
+                Some(&provider.id),
+                provider.is_codex_oauth(),
+                provider.codex_fast_mode_enabled(),
+            )
+            .map_err(|e| AppError::Message(format!("Failed to build test request: {e}")))?
+        } else if is_gemini_native {
+            anthropic_to_gemini(anthropic_body)
+                .map_err(|e| AppError::Message(format!("Failed to build test request: {e}")))?
+        } else if is_openai_chat {
+            anthropic_to_openai(anthropic_body)
+                .map_err(|e| AppError::Message(format!("Failed to build test request: {e}")))?
+        } else {
+            anthropic_body
+        };
+
+        let client = crate::proxy::http_client::get();
+        let mut request_builder = client.post(&url);
+        if is_github_copilot {
+            let request_id = uuid::Uuid::new_v4().to_string();
+            request_builder = request_builder
+                .header("authorization", format!("Bearer {}", auth.api_key))
+                .header("content-type", "application/json")
+                .header("accept", "text/event-stream")
+                .header("accept-encoding", "identity")
+                .header("user-agent", copilot_auth::COPILOT_USER_AGENT)
+                .header("editor-version", copilot_auth::COPILOT_EDITOR_VERSION)
+                .header(
+                    "editor-plugin-version",
+                    copilot_auth::COPILOT_PLUGIN_VERSION,
+                )
+                .header(
+                    "copilot-integration-id",
+                    copilot_auth::COPILOT_INTEGRATION_ID,
+                )
+                .header("x-github-api-version", copilot_auth::COPILOT_API_VERSION)
+                .header("openai-intent", "conversation-agent")
+                .header("x-initiator", "user")
+                .header("x-interaction-type", "conversation-agent")
+                .header("x-vscode-user-agent-library-version", "electron-fetch")
+                .header("x-request-id", &request_id)
+                .header("x-agent-task-id", &request_id);
+        } else if is_gemini_native {
+            request_builder = match auth.strategy {
+                AuthStrategy::GoogleOAuth => {
+                    let token = auth.access_token.as_ref().unwrap_or(&auth.api_key);
+                    request_builder
+                        .header("authorization", format!("Bearer {token}"))
+                        .header("x-goog-api-client", "GeminiCLI/1.0")
+                        .header("content-type", "application/json")
+                        .header("accept", "text/event-stream")
+                        .header("accept-encoding", "identity")
+                }
+                _ => request_builder
+                    .header("x-goog-api-key", &auth.api_key)
+                    .header("content-type", "application/json")
+                    .header("accept", "text/event-stream")
+                    .header("accept-encoding", "identity"),
+            };
+        } else if is_openai_chat || is_openai_responses {
+            request_builder = request_builder
+                .header("authorization", format!("Bearer {}", auth.api_key))
+                .header("content-type", "application/json")
+                .header("accept", "text/event-stream")
+                .header("accept-encoding", "identity");
+        } else {
+            for (name, value) in ClaudeAdapter::new().get_auth_headers(auth) {
+                request_builder = request_builder.header(name, value);
+            }
+            request_builder = request_builder
+                .header("anthropic-version", "2023-06-01")
+                .header(
+                    "anthropic-beta",
+                    "claude-code-20250219,interleaved-thinking-2025-05-14",
+                )
+                .header("anthropic-dangerous-direct-browser-access", "true")
+                .header("content-type", "application/json")
+                .header("accept", "application/json")
+                .header("accept-encoding", "identity")
+                .header("accept-language", "*")
+                .header("user-agent", "claude-cli/2.1.2 (external, cli)")
+                .header("x-app", "cli")
+                .header("x-stainless-lang", "js")
+                .header("x-stainless-package-version", "0.70.0")
+                .header("x-stainless-os", Self::get_os_name())
+                .header("x-stainless-arch", Self::get_arch_name())
+                .header("x-stainless-runtime", "node")
+                .header("x-stainless-runtime-version", "v22.20.0")
+                .header("x-stainless-retry-count", "0")
+                .header("x-stainless-timeout", "600")
+                .header("sec-fetch-mode", "cors");
+        }
+
+        let response = request_builder
+            .timeout(timeout)
+            .json(&body)
+            .send()
+            .await
+            .map_err(Self::map_request_error)?;
+        let status = response.status().as_u16();
+        if !response.status().is_success() {
+            let error_text = response.text().await.unwrap_or_default();
+            return Err(Self::http_status_error(status, error_text));
+        }
+
+        let mut stream = response.bytes_stream();
+        let mut buffer = String::new();
+        while let Some(chunk) = stream.next().await {
+            let chunk = chunk.map_err(|e| AppError::Message(format!("Stream read failed: {e}")))?;
+            buffer.push_str(&String::from_utf8_lossy(&chunk));
+        }
+        let response_text =
+            Self::extract_stream_text(&buffer).unwrap_or_else(|| buffer.trim().to_string());
+        Ok((model.trim().to_string(), response_text))
+    }
+
+    fn extract_stream_text(buffer: &str) -> Option<String> {
+        let mut text = String::new();
+        for line in buffer.lines() {
+            let Some(data) = line.trim().strip_prefix("data:") else {
+                continue;
+            };
+            let data = data.trim();
+            if data.is_empty() || data == "[DONE]" {
+                continue;
+            }
+            let Ok(value) = serde_json::from_str::<serde_json::Value>(data) else {
+                continue;
+            };
+            Self::append_json_text_delta(&value, &mut text);
+        }
+        let trimmed = text.trim();
+        (!trimmed.is_empty()).then(|| trimmed.to_string())
+    }
+
+    fn append_json_text_delta(value: &serde_json::Value, text: &mut String) {
+        if let Some(delta) = value.get("delta").and_then(|v| v.as_str()) {
+            text.push_str(delta);
+        }
+        if let Some(delta) = value
+            .get("delta")
+            .and_then(|v| v.get("text"))
+            .and_then(|v| v.as_str())
+        {
+            text.push_str(delta);
+        }
+        if let Some(content) = value
+            .get("content_block")
+            .and_then(|v| v.get("text"))
+            .and_then(|v| v.as_str())
+        {
+            text.push_str(content);
+        }
+        if let Some(choices) = value.get("choices").and_then(|v| v.as_array()) {
+            for choice in choices {
+                if let Some(content) = choice
+                    .get("delta")
+                    .and_then(|v| v.get("content"))
+                    .and_then(|v| v.as_str())
+                {
+                    text.push_str(content);
+                }
+            }
+        }
+        if let Some(candidates) = value.get("candidates").and_then(|v| v.as_array()) {
+            for candidate in candidates {
+                if let Some(parts) = candidate
+                    .get("content")
+                    .and_then(|v| v.get("parts"))
+                    .and_then(|v| v.as_array())
+                {
+                    for part in parts {
+                        if let Some(part_text) = part.get("text").and_then(|v| v.as_str()) {
+                            text.push_str(part_text);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     async fn check_claude_stream(
         client: &Client,
         base_url: &str,

@@ -1,6 +1,6 @@
 //! 流式健康检查日志 DAO
 
-use crate::database::{lock_conn, Database};
+use crate::database::{Database, lock_conn};
 use crate::error::AppError;
 use crate::services::stream_check::{StreamCheckConfig, StreamCheckResult};
 
@@ -42,8 +42,16 @@ impl Database {
     /// 获取流式检查配置
     pub fn get_stream_check_config(&self) -> Result<StreamCheckConfig, AppError> {
         match self.get_setting("stream_check_config")? {
-            Some(json) => serde_json::from_str(&json)
-                .map_err(|e| AppError::Message(format!("解析配置失败: {e}"))),
+            Some(json) => {
+                let mut config: StreamCheckConfig = serde_json::from_str(&json)
+                    .map_err(|e| AppError::Message(format!("解析配置失败: {e}")))?;
+                if config.claude_model.trim().is_empty()
+                    || config.claude_model == "claude-haiku-4-5-20251001"
+                {
+                    config.claude_model = StreamCheckConfig::default().claude_model;
+                }
+                Ok(config)
+            }
             None => Ok(StreamCheckConfig::default()),
         }
     }

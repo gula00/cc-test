@@ -7,7 +7,7 @@ import { Label } from "@/components/ui/label";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Save, Loader2 } from "lucide-react";
 import { toast } from "sonner";
-import { Ipv4ModelFetchPanel } from "@/components/usage/Ipv4ModelFetchPanel";
+import { Ipv4TestPanel } from "@/features/ipv4-test/Ipv4TestPanel";
 import {
   getStreamCheckConfig,
   saveStreamCheckConfig,
@@ -24,7 +24,7 @@ export function ModelTestConfigPanel() {
     timeoutSecs: "45",
     maxRetries: "2",
     degradedThresholdMs: "6000",
-    claudeModel: "claude-haiku-4-5-20251001",
+    claudeModel: "opus-6",
     codexModel: "gpt-5.4@low",
     geminiModel: "gemini-3-flash-preview",
     testPrompt: "Who are you?",
@@ -113,7 +113,7 @@ export function ModelTestConfigPanel() {
               onChange={(e) =>
                 setConfig({ ...config, claudeModel: e.target.value })
               }
-              placeholder="claude-3-5-haiku-latest"
+              placeholder="opus-6"
             />
           </div>
 
@@ -228,7 +228,7 @@ export function ModelTestConfigPanel() {
       </div>
 
       <div className="border-t border-border/50 pt-6">
-        <Ipv4ModelFetchPanel />
+        <Ipv4TestPanel />
       </div>
     </div>
   );

@@ -221,6 +221,11 @@ export function ProviderList({
         setPendingTestProvider(provider);
         setShowStreamCheckConfirm(true);
       } else {
+        setStreamCheckResults((prev) => {
+          const next = { ...prev };
+          delete next[provider.id];
+          return next;
+        });
         void checkProvider(provider.id, provider.name).then((result) => {
           if (result) {
             setStreamCheckResults((prev) => ({
@@ -235,6 +240,7 @@ export function ProviderList({
   );
 
   const runAllProviderTests = useCallback(async () => {
+    setStreamCheckResults({});
     const results = await checkAllProviders();
     if (Object.keys(results).length > 0) {
       setStreamCheckResults((prev) => ({
@@ -271,6 +277,11 @@ export function ProviderList({
       setPendingBulkTest(false);
       setPendingTestProvider(null);
     } else if (pendingTestProvider) {
+      setStreamCheckResults((prev) => {
+        const next = { ...prev };
+        delete next[pendingTestProvider.id];
+        return next;
+      });
       void checkProvider(
         pendingTestProvider.id,
         pendingTestProvider.name,

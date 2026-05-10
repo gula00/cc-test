@@ -45,6 +45,10 @@ import {
   showFetchModelsError,
   type FetchedModel,
 } from "@/lib/api/model-fetch";
+import {
+  testProviderPrompt,
+  type ProviderPromptTestResult,
+} from "@/lib/api/model-test";
 import type {
   ProviderCategory,
   ClaudeApiFormat,
@@ -210,6 +214,10 @@ export function ClaudeFormFields({
   // 通用模型获取（非 Copilot 供应商）
   const [fetchedModels, setFetchedModels] = useState<FetchedModel[]>([]);
   const [isFetchingModels, setIsFetchingModels] = useState(false);
+  const [isTestingModel, setIsTestingModel] = useState(false);
+  const [modelTestResult, setModelTestResult] =
+    useState<ProviderPromptTestResult | null>(null);
+  const [modelTestError, setModelTestError] = useState<string | null>(null);
 
   useEffect(() => {
     setFetchedModels([]);
@@ -304,6 +312,28 @@ export function ClaudeFormFields({
   ]);
 
   // 模型输入框：支持手动输入 + 下拉选择
+  const handleTestModel = useCallback(async () => {
+    if (!providerId || isTestingModel) return;
+
+    const targetModel = claudeModel.trim();
+    setIsTestingModel(true);
+    setModelTestResult(null);
+    setModelTestError(null);
+
+    try {
+      const result = await testProviderPrompt(
+        "claude",
+        providerId,
+        targetModel || undefined,
+      );
+      setModelTestResult(result);
+    } catch (error) {
+      setModelTestError(String(error));
+    } finally {
+      setIsTestingModel(false);
+    }
+  }, [claudeModel, isTestingModel, providerId]);
+
   const renderModelInput = (
     id: string,
     value: string,
@@ -737,6 +767,60 @@ export function ClaudeFormFields({
                   t("providerForm.modelPlaceholder", { defaultValue: "" }),
                 )}
               </div>
+            </div>
+            <div className="space-y-2 pt-2">
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="h-8"
+                onClick={handleTestModel}
+                disabled={!providerId || isTestingModel}
+                title={
+                  providerId
+                    ? undefined
+                    : t("providerAdvanced.testReturnNeedSave", {
+                        defaultValue: "保存供应商后才能测试",
+                      })
+                }
+              >
+                {isTestingModel ? (
+                  <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" />
+                ) : null}
+                {t("providerAdvanced.testReturn", {
+                  defaultValue: "测试返回",
+                })}
+              </Button>
+              {(modelTestResult || modelTestError) && (
+                <div
+                  className={
+                    modelTestResult
+                      ? "rounded-md border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-xs text-emerald-700 dark:text-emerald-300"
+                      : "rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive"
+                  }
+                >
+                  {modelTestResult
+                    ? t("providerAdvanced.testReturnSuccess", {
+                        providerName: baseUrl || "Claude",
+                        model: modelTestResult.modelUsed,
+                        responseTimeMs: modelTestResult.responseTimeMs,
+                        defaultValue:
+                          "{{providerName}} 返回成功：{{model}} ({{responseTimeMs}}ms)",
+                      })
+                    : t("providerAdvanced.testReturnFailed", {
+                        message: modelTestError || "",
+                        defaultValue: "测试失败：{{message}}",
+                      })}
+                  {modelTestResult && (
+                    <pre className="mt-2 max-h-40 overflow-y-auto whitespace-pre-wrap rounded bg-background/80 p-2 text-foreground">
+                      {modelTestResult.responseText ||
+                        t("providerAdvanced.testReturnEmpty", {
+                          defaultValue: "模型返回为空",
+                        })}
+                    </pre>
+                  )}
+                </div>
+              )}
             </div>
           </CollapsibleContent>
         </Collapsible>
