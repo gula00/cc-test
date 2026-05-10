@@ -93,8 +93,13 @@ export function ProviderList({
   onSetAsDefault,
 }: ProviderListProps) {
   const { t } = useTranslation();
-  const { checkProvider, checkAllProviders, isChecking, isCheckingAll } =
-    useStreamCheck(appId);
+  const {
+    checkProvider,
+    checkProviders,
+    isChecking,
+    isCheckingAll,
+    streamCheckResults,
+  } = useStreamCheck(appId);
   const { sortedProviders, sensors, handleDragEnd } = useDragSort(
     providers,
     appId,
@@ -198,9 +203,6 @@ export function ProviderList({
   const [pendingTestProvider, setPendingTestProvider] =
     useState<Provider | null>(null);
   const [pendingBulkTest, setPendingBulkTest] = useState(false);
-  const [streamCheckResults, setStreamCheckResults] = useState<
-    Record<string, StreamCheckResult>
-  >({});
   const { data: claudeDesktopStatus } = useQuery({
     queryKey: ["claudeDesktopStatus"],
     queryFn: () => providersApi.getClaudeDesktopStatus(),
@@ -221,34 +223,19 @@ export function ProviderList({
         setPendingTestProvider(provider);
         setShowStreamCheckConfirm(true);
       } else {
-        setStreamCheckResults((prev) => {
-          const next = { ...prev };
-          delete next[provider.id];
-          return next;
-        });
-        void checkProvider(provider.id, provider.name).then((result) => {
-          if (result) {
-            setStreamCheckResults((prev) => ({
-              ...prev,
-              [provider.id]: result,
-            }));
-          }
-        });
+        void checkProvider(provider.id, provider.name);
       }
     },
     [checkProvider, settings?.streamCheckConfirmed],
   );
 
   const runAllProviderTests = useCallback(async () => {
-    setStreamCheckResults({});
-    const results = await checkAllProviders();
-    if (Object.keys(results).length > 0) {
-      setStreamCheckResults((prev) => ({
-        ...prev,
-        ...results,
-      }));
-    }
-  }, [checkAllProviders]);
+    await checkProviders(
+      sortedProviders
+        .filter((provider) => provider.category !== "official")
+        .map((provider) => ({ id: provider.id, name: provider.name })),
+    );
+  }, [checkProviders, sortedProviders]);
 
   const handleTestAll = useCallback(() => {
     if (!settings?.streamCheckConfirmed) {
@@ -277,22 +264,7 @@ export function ProviderList({
       setPendingBulkTest(false);
       setPendingTestProvider(null);
     } else if (pendingTestProvider) {
-      setStreamCheckResults((prev) => {
-        const next = { ...prev };
-        delete next[pendingTestProvider.id];
-        return next;
-      });
-      void checkProvider(
-        pendingTestProvider.id,
-        pendingTestProvider.name,
-      ).then((result) => {
-        if (result) {
-          setStreamCheckResults((prev) => ({
-            ...prev,
-            [pendingTestProvider.id]: result,
-          }));
-        }
-      });
+      void checkProvider(pendingTestProvider.id, pendingTestProvider.name);
       setPendingTestProvider(null);
     }
   };
