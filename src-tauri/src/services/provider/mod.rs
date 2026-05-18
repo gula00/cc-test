@@ -13,6 +13,7 @@ use serde::Deserialize;
 use serde_json::Value;
 
 use crate::app_config::AppType;
+use crate::database::{validate_cost_multiplier, validate_pricing_source};
 use crate::error::AppError;
 use crate::provider::{Provider, UsageResult};
 use crate::services::mcp::McpService;
@@ -259,6 +260,35 @@ mod tests {
             err.to_string().contains("auth"),
             "expected auth error, got {err:?}"
         );
+    }
+
+    #[test]
+    fn validate_provider_settings_rejects_negative_cost_multiplier() {
+        let mut provider = Provider::with_id(
+            "claude".into(),
+            "Claude".into(),
+            json!({
+                "env": {
+                    "ANTHROPIC_AUTH_TOKEN": "token",
+                    "ANTHROPIC_BASE_URL": "https://claude.example"
+                }
+            }),
+            None,
+        );
+        provider.meta = Some(ProviderMeta {
+            cost_multiplier: Some("-1".to_string()),
+            ..ProviderMeta::default()
+        });
+
+        let err = ProviderService::validate_provider_settings(&AppType::Claude, &provider)
+            .expect_err("negative multiplier should be rejected");
+        assert!(matches!(
+            err,
+            AppError::Localized {
+                key: "error.invalidMultiplier",
+                ..
+            }
+        ));
     }
 
     #[test]
@@ -594,59 +624,6 @@ base_url = "http://localhost:8080"
                 Some(&Value::String("updated-key".to_string())),
                 "legacy provider that already exists in live should still be synced"
             );
-        });
-    }
-
-    #[test]
-    #[serial]
-    fn add_inactive_codex_provider_does_not_set_current_or_touch_live() {
-        with_test_home(|state, _| {
-            let provider = Provider {
-                id: "codex-inactive".to_string(),
-                name: "Codex Inactive".to_string(),
-                settings_config: json!({
-                    "auth": {
-                        "OPENAI_API_KEY": "test-key"
-                    },
-                    "config": r#"model_provider = "custom"
-model = "gpt-5.4"
-model_reasoning_effort = "low"
-disable_response_storage = true
-
-[model_providers.custom]
-name = "custom"
-base_url = "http://127.0.0.1:8317/v1"
-wire_api = "responses"
-requires_openai_auth = true"#
-                }),
-                website_url: None,
-                category: Some("custom".to_string()),
-                created_at: Some(1),
-                sort_index: Some(0),
-                notes: None,
-                meta: None,
-                icon: None,
-                icon_color: None,
-                in_failover_queue: false,
-            };
-
-            ProviderService::add_inactive(state, AppType::Codex, provider.clone())
-                .expect("save inactive codex provider");
-
-            let current = state
-                .db
-                .get_current_provider(AppType::Codex.as_str())
-                .expect("query current provider");
-            assert!(
-                current.is_none(),
-                "inactive add should not set current provider"
-            );
-
-            let saved = state
-                .db
-                .get_provider_by_id(&provider.id, AppType::Codex.as_str())
-                .expect("query saved provider");
-            assert!(saved.is_some(), "provider should still be stored");
         });
     }
 
@@ -1092,24 +1069,6 @@ impl ProviderService {
             write_live_with_common_config(state.db.as_ref(), &app_type, &provider)?;
         }
 
-        Ok(true)
-    }
-
-    /// Add a provider to the database without activating or syncing it to live config.
-    pub fn add_inactive(
-        state: &AppState,
-        app_type: AppType,
-        provider: Provider,
-    ) -> Result<bool, AppError> {
-        let mut provider = provider;
-        Self::normalize_provider_if_claude(&app_type, &mut provider);
-        Self::validate_provider_settings(&app_type, &provider)?;
-        normalize_provider_common_config_for_storage(state.db.as_ref(), &app_type, &mut provider)?;
-        if app_type.is_additive_mode() {
-            Self::set_provider_live_config_managed(&mut provider, false);
-        }
-
-        state.db.save_provider(app_type.as_str(), &provider)?;
         Ok(true)
     }
 
@@ -1839,12 +1798,15 @@ impl ProviderService {
             // Auth
             "ANTHROPIC_API_KEY",
             "ANTHROPIC_AUTH_TOKEN",
-            // Models (4 fields + 1 legacy)
+            // Models and Claude Code model-menu display names
             "ANTHROPIC_MODEL",
             "ANTHROPIC_REASONING_MODEL", // legacy: 已废弃，但旧配置可能残留
             "ANTHROPIC_DEFAULT_HAIKU_MODEL",
+            "ANTHROPIC_DEFAULT_HAIKU_MODEL_NAME",
             "ANTHROPIC_DEFAULT_OPUS_MODEL",
+            "ANTHROPIC_DEFAULT_OPUS_MODEL_NAME",
             "ANTHROPIC_DEFAULT_SONNET_MODEL",
+            "ANTHROPIC_DEFAULT_SONNET_MODEL_NAME",
             // Endpoint
             "ANTHROPIC_BASE_URL",
         ];
@@ -2216,6 +2178,12 @@ impl ProviderService {
 
         // Validate and clean UsageScript configuration (common for all app types)
         if let Some(meta) = &provider.meta {
+            if let Some(multiplier) = meta.cost_multiplier.as_deref() {
+                validate_cost_multiplier(multiplier)?;
+            }
+            if let Some(source) = meta.pricing_model_source.as_deref() {
+                validate_pricing_source(source)?;
+            }
             if let Some(usage_script) = &meta.usage_script {
                 validate_usage_script(usage_script)?;
             }

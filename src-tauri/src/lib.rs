@@ -1047,7 +1047,6 @@ pub fn run() {
             commands::get_providers,
             commands::get_current_provider,
             commands::add_provider,
-            commands::add_provider_inactive,
             commands::update_provider,
             commands::delete_provider,
             commands::remove_provider_from_live_config,

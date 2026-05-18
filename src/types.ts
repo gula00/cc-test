@@ -133,7 +133,7 @@ export interface AuthBinding {
 
 export interface ClaudeDesktopModelRoute {
   model: string;
-  displayName?: string;
+  labelOverride?: string;
   supports1m?: boolean;
 }
 
@@ -293,7 +293,7 @@ export interface Settings {
   // User has confirmed the common config first-run notice
   commonConfigConfirmed?: boolean;
   // 首选语言（可选，默认中文）
-  language?: "en" | "zh";
+  language?: "en" | "zh" | "ja";
 
   // 主页面显示的应用（默认全部显示）
   visibleApps?: VisibleApps;
