@@ -43,7 +43,6 @@ export interface ClaudeDesktopStatus {
 export interface ClaudeDesktopDefaultRoute {
   routeId: string;
   envKey: string;
-  displayName: string;
   supports1m: boolean;
 }
 
@@ -65,7 +64,7 @@ export const providersApi = {
   },
 
   async addInactive(provider: Provider, appId: AppId): Promise<boolean> {
-    return await invoke("add_provider_inactive", { provider, app: appId });
+    return await providersApi.add(provider, appId, false);
   },
 
   async update(

@@ -17,7 +17,7 @@ use crate::proxy::providers::transform::anthropic_to_openai;
 use crate::proxy::providers::transform_gemini::anthropic_to_gemini;
 use crate::proxy::providers::transform_responses::anthropic_to_responses;
 use crate::proxy::providers::{
-    AuthInfo, AuthStrategy, ClaudeAdapter, ProviderAdapter, get_adapter,
+    get_adapter, AuthInfo, AuthStrategy, ClaudeAdapter, ProviderAdapter,
 };
 
 /// 健康状态枚举
@@ -57,7 +57,7 @@ impl Default for StreamCheckConfig {
             timeout_secs: 45,
             max_retries: 2,
             degraded_threshold_ms: 6000,
-            claude_model: "opus-6".to_string(),
+            claude_model: "claude-haiku-4-5-20251001".to_string(),
             codex_model: "gpt-5.4@low".to_string(),
             gemini_model: "gemini-3-flash-preview".to_string(),
             test_prompt: default_test_prompt(),
@@ -86,9 +86,6 @@ pub struct StreamCheckResult {
 pub struct StreamCheckService;
 
 impl StreamCheckService {
-    const CLAUDE_PRIMARY_TEST_MODEL: &'static str = "opus-6";
-    const CLAUDE_FALLBACK_TEST_MODEL: &'static str = "mimo-v2.5-pro";
-
     /// 执行流式健康检查（带重试）
     ///
     /// 如果 Provider 配置了单独的测试配置（meta.testConfig），则使用该配置覆盖全局配置
@@ -242,10 +239,9 @@ impl StreamCheckService {
         let model_to_test = Self::resolve_test_model(app_type, provider, config);
         let test_prompt = &config.test_prompt;
 
-        let mut model_tested = model_to_test.clone();
         let result = match app_type {
             AppType::Claude | AppType::ClaudeDesktop => {
-                let result = Self::check_claude_stream(
+                Self::check_claude_stream(
                     &client,
                     &base_url,
                     &auth,
@@ -256,24 +252,7 @@ impl StreamCheckService {
                     claude_api_format_override.as_deref(),
                     None,
                 )
-                .await;
-                if Self::should_retry_claude_with_fallback(&model_to_test, &result) {
-                    model_tested = Self::CLAUDE_FALLBACK_TEST_MODEL.to_string();
-                    Self::check_claude_stream(
-                        &client,
-                        &base_url,
-                        &auth,
-                        Self::CLAUDE_FALLBACK_TEST_MODEL,
-                        test_prompt,
-                        request_timeout,
-                        provider,
-                        claude_api_format_override.as_deref(),
-                        None,
-                    )
-                    .await
-                } else {
-                    result
-                }
+                .await
             }
             AppType::Codex => {
                 Self::check_codex_stream(
@@ -306,42 +285,14 @@ impl StreamCheckService {
         };
 
         let response_time = start.elapsed().as_millis() as u64;
-
         Ok(Self::build_stream_check_result(
             result,
             response_time,
             config.degraded_threshold_ms,
-            &model_tested,
+            &model_to_test,
         ))
     }
 
-    fn should_retry_claude_with_fallback(
-        model: &str,
-        result: &Result<(u16, String), AppError>,
-    ) -> bool {
-        model.trim() == Self::CLAUDE_PRIMARY_TEST_MODEL && Self::is_model_not_found_result(result)
-    }
-
-    fn is_model_not_found_result(result: &Result<(u16, String), AppError>) -> bool {
-        match result {
-            Err(AppError::HttpStatus { status, body }) => {
-                Self::detect_error_category(*status, body) == Some("modelNotFound")
-            }
-            _ => false,
-        }
-    }
-
-    /// Claude 流式检查
-    ///
-    /// 根据供应商的 api_format 选择请求格式：
-    /// - "anthropic" (默认): Anthropic Messages API (/v1/messages)
-    /// - "openai_chat": OpenAI Chat Completions API (/v1/chat/completions)
-    /// - "openai_responses": OpenAI Responses API (/v1/responses)
-    /// - "gemini_native": Gemini Native streamGenerateContent
-    ///
-    /// `extra_headers` 是一个可选的供应商级自定义 header 集合（从 OpenClaw
-    /// 的 `settings_config.headers` 或 OpenCode 的 `settings_config.options.headers`
-    /// 读取），在所有内置 header 之后追加，用于覆盖或补充（例如自定义 User-Agent）。
     #[allow(clippy::too_many_arguments)]
     pub async fn test_claude_prompt(
         base_url: &str,
@@ -354,6 +305,7 @@ impl StreamCheckService {
     ) -> Result<(String, String), AppError> {
         let base = base_url.trim_end_matches('/');
         let is_github_copilot = auth.strategy == AuthStrategy::GitHubCopilot;
+
         let api_format = provider
             .meta
             .as_ref()
@@ -365,6 +317,7 @@ impl StreamCheckService {
                     .and_then(|v| v.as_str())
             })
             .unwrap_or("anthropic");
+
         let effective_api_format = claude_api_format_override.unwrap_or(api_format);
         let is_full_url = provider
             .meta
@@ -388,12 +341,15 @@ impl StreamCheckService {
             "messages": [{ "role": "user", "content": test_prompt }],
             "stream": true
         });
+        let is_codex_oauth = provider.is_codex_oauth();
+        let codex_fast_mode = provider.codex_fast_mode_enabled();
+
         let body = if is_openai_responses {
             anthropic_to_responses(
                 anthropic_body,
                 Some(&provider.id),
-                provider.is_codex_oauth(),
-                provider.codex_fast_mode_enabled(),
+                is_codex_oauth,
+                codex_fast_mode,
             )
             .map_err(|e| AppError::Message(format!("Failed to build test request: {e}")))?
         } else if is_gemini_native {
@@ -408,6 +364,7 @@ impl StreamCheckService {
 
         let client = crate::proxy::http_client::get();
         let mut request_builder = client.post(&url);
+
         if is_github_copilot {
             let request_id = uuid::Uuid::new_v4().to_string();
             request_builder = request_builder
@@ -456,9 +413,13 @@ impl StreamCheckService {
                 .header("accept", "text/event-stream")
                 .header("accept-encoding", "identity");
         } else {
-            for (name, value) in ClaudeAdapter::new().get_auth_headers(auth) {
+            let auth_headers = ClaudeAdapter::new()
+                .get_auth_headers(auth)
+                .map_err(|e| AppError::Message(format!("stream check 构造鉴权头失败: {e}")))?;
+            for (name, value) in auth_headers {
                 request_builder = request_builder.header(name, value);
             }
+
             request_builder = request_builder
                 .header("anthropic-version", "2023-06-01")
                 .header(
@@ -490,6 +451,7 @@ impl StreamCheckService {
             .await
             .map_err(Self::map_request_error)?;
         let status = response.status().as_u16();
+
         if !response.status().is_success() {
             let error_text = response.text().await.unwrap_or_default();
             return Err(Self::http_status_error(status, error_text));
@@ -501,76 +463,25 @@ impl StreamCheckService {
             let chunk = chunk.map_err(|e| AppError::Message(format!("Stream read failed: {e}")))?;
             buffer.push_str(&String::from_utf8_lossy(&chunk));
         }
+
         let response_text =
             Self::extract_stream_text(&buffer).unwrap_or_else(|| buffer.trim().to_string());
+
         Ok((model.trim().to_string(), response_text))
     }
 
-    fn extract_stream_text(buffer: &str) -> Option<String> {
-        let mut text = String::new();
-        for line in buffer.lines() {
-            let Some(data) = line.trim().strip_prefix("data:") else {
-                continue;
-            };
-            let data = data.trim();
-            if data.is_empty() || data == "[DONE]" {
-                continue;
-            }
-            let Ok(value) = serde_json::from_str::<serde_json::Value>(data) else {
-                continue;
-            };
-            Self::append_json_text_delta(&value, &mut text);
-        }
-        let trimmed = text.trim();
-        (!trimmed.is_empty()).then(|| trimmed.to_string())
-    }
-
-    fn append_json_text_delta(value: &serde_json::Value, text: &mut String) {
-        if let Some(delta) = value.get("delta").and_then(|v| v.as_str()) {
-            text.push_str(delta);
-        }
-        if let Some(delta) = value
-            .get("delta")
-            .and_then(|v| v.get("text"))
-            .and_then(|v| v.as_str())
-        {
-            text.push_str(delta);
-        }
-        if let Some(content) = value
-            .get("content_block")
-            .and_then(|v| v.get("text"))
-            .and_then(|v| v.as_str())
-        {
-            text.push_str(content);
-        }
-        if let Some(choices) = value.get("choices").and_then(|v| v.as_array()) {
-            for choice in choices {
-                if let Some(content) = choice
-                    .get("delta")
-                    .and_then(|v| v.get("content"))
-                    .and_then(|v| v.as_str())
-                {
-                    text.push_str(content);
-                }
-            }
-        }
-        if let Some(candidates) = value.get("candidates").and_then(|v| v.as_array()) {
-            for candidate in candidates {
-                if let Some(parts) = candidate
-                    .get("content")
-                    .and_then(|v| v.get("parts"))
-                    .and_then(|v| v.as_array())
-                {
-                    for part in parts {
-                        if let Some(part_text) = part.get("text").and_then(|v| v.as_str()) {
-                            text.push_str(part_text);
-                        }
-                    }
-                }
-            }
-        }
-    }
-
+    /// Claude 流式检查
+    ///
+    /// 根据供应商的 api_format 选择请求格式：
+    /// - "anthropic" (默认): Anthropic Messages API (/v1/messages)
+    /// - "openai_chat": OpenAI Chat Completions API (/v1/chat/completions)
+    /// - "openai_responses": OpenAI Responses API (/v1/responses)
+    /// - "gemini_native": Gemini Native streamGenerateContent
+    ///
+    /// `extra_headers` 是一个可选的供应商级自定义 header 集合（从 OpenClaw
+    /// 的 `settings_config.headers` 或 OpenCode 的 `settings_config.options.headers`
+    /// 读取），在所有内置 header 之后追加，用于覆盖或补充（例如自定义 User-Agent）。
+    #[allow(clippy::too_many_arguments)]
     async fn check_claude_stream(
         client: &Client,
         base_url: &str,
@@ -710,7 +621,10 @@ impl StreamCheckService {
             // - AuthStrategy::ClaudeAuth → Authorization: Bearer
             // - AuthStrategy::Bearer     → Authorization: Bearer
             // 避免之前"无条件 Bearer + 条件 x-api-key 双发"导致的假阴性 / auth conflict。
-            for (name, value) in ClaudeAdapter::new().get_auth_headers(auth) {
+            let auth_headers = ClaudeAdapter::new()
+                .get_auth_headers(auth)
+                .map_err(|e| AppError::Message(format!("stream check 构造鉴权头失败: {e}")))?;
+            for (name, value) in auth_headers {
                 request_builder = request_builder.header(name, value);
             }
 
@@ -776,6 +690,64 @@ impl StreamCheckService {
         } else {
             Err(AppError::Message("No response data received".to_string()))
         }
+    }
+
+    fn extract_stream_text(buffer: &str) -> Option<String> {
+        let mut text = String::new();
+
+        for line in buffer.lines() {
+            let Some(data) = line.trim().strip_prefix("data:") else {
+                continue;
+            };
+
+            let payload = data.trim();
+            if payload.is_empty() || payload == "[DONE]" {
+                continue;
+            }
+
+            let Ok(value) = serde_json::from_str::<serde_json::Value>(payload) else {
+                continue;
+            };
+
+            if let Some(fragment) = Self::extract_text_from_event_value(&value) {
+                text.push_str(&fragment);
+            }
+        }
+
+        let text = text.trim();
+        (!text.is_empty()).then(|| text.to_string())
+    }
+
+    fn extract_text_from_event_value(value: &serde_json::Value) -> Option<String> {
+        fn collect(value: &serde_json::Value, output: &mut String) {
+            match value {
+                serde_json::Value::String(s) => output.push_str(s),
+                serde_json::Value::Array(items) => {
+                    for item in items {
+                        collect(item, output);
+                    }
+                }
+                serde_json::Value::Object(map) => {
+                    for key in ["output_text", "text", "content", "partial_json"] {
+                        if let Some(next) = map.get(key) {
+                            collect(next, output);
+                        }
+                    }
+
+                    for key in ["delta", "message", "choices", "candidates", "parts"] {
+                        if let Some(next) = map.get(key) {
+                            collect(next, output);
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        let mut text = String::new();
+        collect(value, &mut text);
+        let trimmed = text.trim();
+        (!trimmed.is_empty()).then(|| trimmed.to_string())
     }
 
     /// Codex 流式检查
@@ -1030,7 +1002,7 @@ impl StreamCheckService {
                         let category = Self::detect_error_category(*status, body);
                         (
                             Some(*status),
-                            format!("HTTP {status}: {body}"),
+                            Self::classify_http_status(*status).to_string(),
                             category.map(|s| s.to_string()),
                         )
                     }
@@ -1630,10 +1602,6 @@ impl StreamCheckService {
         provider: &Provider,
         config: &StreamCheckConfig,
     ) -> String {
-        if let Some(model) = Self::extract_provider_test_model(provider) {
-            return model;
-        }
-
         match app_type {
             AppType::Claude | AppType::ClaudeDesktop => {
                 Self::extract_env_model(provider, "ANTHROPIC_MODEL")
@@ -1655,17 +1623,6 @@ impl StreamCheckService {
                 Self::extract_openclaw_model(provider).unwrap_or_else(|| "gpt-4o".to_string())
             }
         }
-    }
-
-    fn extract_provider_test_model(provider: &Provider) -> Option<String> {
-        provider
-            .meta
-            .as_ref()
-            .and_then(|meta| meta.test_config.as_ref())
-            .filter(|config| config.enabled)
-            .and_then(|config| config.test_model.as_deref())
-            .map(|model| model.trim().to_string())
-            .filter(|model| !model.is_empty())
     }
 
     fn extract_opencode_model(provider: &Provider) -> Option<String> {
