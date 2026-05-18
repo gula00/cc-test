@@ -85,7 +85,12 @@ vi.mock("@dnd-kit/sortable", async () => {
 vi.mock("@/hooks/useStreamCheck", () => ({
   useStreamCheck: () => ({
     checkProvider: vi.fn(),
+    checkProviders: vi.fn(),
+    clearProviderResult: vi.fn(),
+    clearAllResults: vi.fn(),
     isChecking: () => false,
+    isCheckingAll: false,
+    streamCheckResults: {},
   }),
 }));
 
@@ -304,6 +309,33 @@ describe("ProviderList Component", () => {
     expect(screen.queryByTestId("provider-card-beta")).not.toBeInTheDocument();
     expect(
       screen.getByText("No providers match your search."),
+    ).toBeInTheDocument();
+  });
+
+  it("shows the branch-specific bulk test button when providers exist", () => {
+    const providerAlpha = createProvider({ id: "alpha", name: "Alpha Labs" });
+
+    useDragSortMock.mockReturnValue({
+      sortedProviders: [providerAlpha],
+      sensors: [],
+      handleDragEnd: vi.fn(),
+    });
+
+    renderWithQueryClient(
+      <ProviderList
+        providers={{ alpha: providerAlpha }}
+        currentProviderId=""
+        appId="claude"
+        onSwitch={vi.fn()}
+        onEdit={vi.fn()}
+        onDelete={vi.fn()}
+        onDuplicate={vi.fn()}
+        onOpenWebsite={vi.fn()}
+      />,
+    );
+
+    expect(
+      screen.getByRole("button", { name: "一键全部测试" }),
     ).toBeInTheDocument();
   });
 });

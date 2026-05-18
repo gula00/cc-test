@@ -14,10 +14,11 @@ function getStartOfLocalDayDate(nowMs: number): Date {
 }
 
 function getPresetLookbackStart(
-  preset: Exclude<UsageRangePreset, "today" | "1d" | "custom">,
+  preset: Exclude<UsageRangePreset, "today" | "1d" | "all" | "custom">,
   nowMs: number,
 ): number {
-  const dayCount = preset === "7d" ? 7 : preset === "14d" ? 14 : 30;
+  const dayCount =
+    preset === "7d" ? 7 : preset === "14d" ? 14 : preset === "30d" ? 30 : 90;
   return Math.floor(
     getStartOfLocalDayDate(nowMs - (dayCount - 1) * DAY_MS).getTime() / 1000,
   );
@@ -43,8 +44,14 @@ export function resolveUsageRange(
     case "7d":
     case "14d":
     case "30d":
+    case "90d":
       return {
         startDate: getPresetLookbackStart(selection.preset, nowMs),
+        endDate,
+      };
+    case "all":
+      return {
+        startDate: 0,
         endDate,
       };
     case "custom": {
@@ -73,6 +80,10 @@ export function getUsageRangePresetLabel(
       return t("usage.preset14d", { defaultValue: "14d" });
     case "30d":
       return t("usage.preset30d", { defaultValue: "30d" });
+    case "90d":
+      return t("usage.preset90d", { defaultValue: "90d" });
+    case "all":
+      return t("usage.presetAll", { defaultValue: "All" });
     case "custom":
       return t("usage.customRange", { defaultValue: "日历筛选" });
   }

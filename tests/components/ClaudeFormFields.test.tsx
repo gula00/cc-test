@@ -206,4 +206,20 @@ describe("ClaudeFormFields", () => {
     expect(screen.getByText(/relay\.example/)).toBeInTheDocument();
     expect(screen.getByText("pong")).toBeInTheDocument();
   });
+
+  it("即使高级选项未显示也保留测试返回按钮", () => {
+    renderCopilotForm({
+      isCopilotPreset: false,
+      usesOAuth: false,
+      category: "official",
+      providerId: "claude-provider-2",
+      shouldShowModelSelector: false,
+    });
+
+    expect(
+      screen.getByRole("button", {
+        name: "测试返回",
+      }),
+    ).toBeInTheDocument();
+  });
 });

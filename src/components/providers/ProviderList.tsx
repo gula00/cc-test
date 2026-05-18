@@ -13,12 +13,13 @@ import {
   type CSSProperties,
 } from "react";
 import { AnimatePresence, motion } from "framer-motion";
-import { AlertTriangle, Search, X } from "lucide-react";
+import { AlertTriangle, Loader2, Search, X } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import type { Provider } from "@/types";
 import type { AppId } from "@/lib/api";
+import type { StreamCheckResult } from "@/lib/api/model-test";
 import { providersApi } from "@/lib/api/providers";
 import { useDragSort } from "@/hooks/useDragSort";
 import {
@@ -92,7 +93,13 @@ export function ProviderList({
   onSetAsDefault,
 }: ProviderListProps) {
   const { t } = useTranslation();
-  const { checkProvider, isChecking } = useStreamCheck(appId);
+  const {
+    checkProvider,
+    checkProviders,
+    isChecking,
+    isCheckingAll,
+    streamCheckResults,
+  } = useStreamCheck(appId);
   const { sortedProviders, sensors, handleDragEnd } = useDragSort(
     providers,
     appId,
@@ -193,6 +200,7 @@ export function ProviderList({
   const [isSearchOpen, setIsSearchOpen] = useState(false);
   const searchInputRef = useRef<HTMLInputElement>(null);
   const [showStreamCheckConfirm, setShowStreamCheckConfirm] = useState(false);
+  const [pendingBulkTest, setPendingBulkTest] = useState(false);
   const [pendingTestProvider, setPendingTestProvider] =
     useState<Provider | null>(null);
   const { data: claudeDesktopStatus } = useQuery({
@@ -211,14 +219,35 @@ export function ProviderList({
   const handleTest = useCallback(
     (provider: Provider) => {
       if (!settings?.streamCheckConfirmed) {
+        setPendingBulkTest(false);
         setPendingTestProvider(provider);
         setShowStreamCheckConfirm(true);
       } else {
-        checkProvider(provider.id, provider.name);
+        void checkProvider(provider.id, provider.name);
       }
     },
     [checkProvider, settings?.streamCheckConfirmed],
   );
+
+  const runAllProviderTests = useCallback(async () => {
+    await checkProviders(
+      sortedProviders.map((provider) => ({
+        id: provider.id,
+        name: provider.name,
+      })),
+    );
+  }, [checkProviders, sortedProviders]);
+
+  const handleTestAll = useCallback(() => {
+    if (!settings?.streamCheckConfirmed) {
+      setPendingTestProvider(null);
+      setPendingBulkTest(true);
+      setShowStreamCheckConfirm(true);
+      return;
+    }
+
+    void runAllProviderTests();
+  }, [runAllProviderTests, settings?.streamCheckConfirmed]);
 
   const handleStreamCheckConfirm = async () => {
     setShowStreamCheckConfirm(false);
@@ -231,8 +260,12 @@ export function ProviderList({
     } catch (error) {
       console.error("Failed to save stream check confirmed:", error);
     }
-    if (pendingTestProvider) {
-      checkProvider(pendingTestProvider.id, pendingTestProvider.name);
+    if (pendingBulkTest) {
+      void runAllProviderTests();
+      setPendingBulkTest(false);
+      setPendingTestProvider(null);
+    } else if (pendingTestProvider) {
+      void checkProvider(pendingTestProvider.id, pendingTestProvider.name);
       setPendingTestProvider(null);
     }
   };
@@ -442,6 +475,7 @@ export function ProviderList({
                 onOpenTerminal={onOpenTerminal}
                 onTest={handleTest}
                 isTesting={isChecking(provider.id)}
+                streamCheckResult={streamCheckResults[provider.id]}
                 isProxyRunning={isProxyRunning}
                 isProxyTakeover={isProxyTakeover}
                 isAutoFailoverEnabled={isFailoverModeActive}
@@ -483,6 +517,25 @@ export function ProviderList({
               <li key={message}>{message}</li>
             ))}
           </ul>
+        </div>
+      )}
+      {sortedProviders.length > 0 && (
+        <div className="flex items-center justify-end">
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={handleTestAll}
+            disabled={isCheckingAll}
+            className="gap-2"
+          >
+            {isCheckingAll ? (
+              <Loader2 className="h-4 w-4 animate-spin" />
+            ) : null}
+            {t("provider.bulkTestAll", {
+              defaultValue: "一键全部测试",
+            })}
+          </Button>
         </div>
       )}
       <AnimatePresence>
@@ -568,6 +621,7 @@ export function ProviderList({
         onConfirm={() => void handleStreamCheckConfirm()}
         onCancel={() => {
           setShowStreamCheckConfirm(false);
+          setPendingBulkTest(false);
           setPendingTestProvider(null);
         }}
       />
@@ -594,6 +648,7 @@ interface SortableProviderCardProps {
   onOpenTerminal?: (provider: Provider) => void;
   onTest?: (provider: Provider) => void;
   isTesting: boolean;
+  streamCheckResult?: StreamCheckResult;
   isProxyRunning: boolean;
   isProxyTakeover: boolean;
   isAutoFailoverEnabled: boolean;
@@ -625,6 +680,7 @@ function SortableProviderCard({
   onOpenTerminal,
   onTest,
   isTesting,
+  streamCheckResult,
   isProxyRunning,
   isProxyTakeover,
   isAutoFailoverEnabled,
@@ -672,6 +728,7 @@ function SortableProviderCard({
         onOpenTerminal={onOpenTerminal}
         onTest={onTest}
         isTesting={isTesting}
+        streamCheckResult={streamCheckResult}
         isProxyRunning={isProxyRunning}
         isProxyTakeover={isProxyTakeover}
         dragHandleProps={{

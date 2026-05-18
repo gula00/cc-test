@@ -695,6 +695,61 @@ export function ClaudeFormFields({
         />
       )}
 
+      <div className="space-y-2">
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          className="h-8"
+          onClick={handleTestModel}
+          disabled={!providerId || isTestingModel}
+          title={
+            providerId
+              ? undefined
+              : t("providerAdvanced.testReturnNeedSave", {
+                  defaultValue: "保存供应商后才能测试",
+                })
+          }
+        >
+          {isTestingModel ? (
+            <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" />
+          ) : null}
+          {t("providerAdvanced.testReturn", {
+            defaultValue: "测试返回",
+          })}
+        </Button>
+        {(modelTestResult || modelTestError) && (
+          <div
+            className={
+              modelTestResult
+                ? "rounded-md border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-xs text-emerald-700 dark:text-emerald-300"
+                : "rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive"
+            }
+          >
+            {modelTestResult
+              ? t("providerAdvanced.testReturnSuccess", {
+                  providerName: baseUrl || "Claude",
+                  model: modelTestResult.modelUsed,
+                  responseTimeMs: modelTestResult.responseTimeMs,
+                  defaultValue:
+                    "{{providerName}} 返回成功：{{model}} ({{responseTimeMs}}ms)",
+                })
+              : t("providerAdvanced.testReturnFailed", {
+                  message: modelTestError || "",
+                  defaultValue: "测试失败：{{message}}",
+                })}
+            {modelTestResult && (
+              <pre className="mt-2 max-h-40 overflow-y-auto whitespace-pre-wrap rounded bg-background/80 p-2 text-foreground">
+                {modelTestResult.responseText ||
+                  t("providerAdvanced.testReturnEmpty", {
+                    defaultValue: "模型返回为空",
+                  })}
+              </pre>
+            )}
+          </div>
+        )}
+      </div>
+
       {/* 高级选项（API 格式 + 认证字段 + 模型映射） */}
       {shouldShowModelSelector && (
         <Collapsible open={advancedExpanded} onOpenChange={setAdvancedExpanded}>
@@ -962,60 +1017,6 @@ export function ClaudeFormFields({
                     "仅在 Claude Code 请求没有明确落到 Sonnet、Opus 或 Haiku 角色时使用；通常可以留空。",
                 })}
               </p>
-            </div>
-            <div className="space-y-2 pt-2">
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                className="h-8"
-                onClick={handleTestModel}
-                disabled={!providerId || isTestingModel}
-                title={
-                  providerId
-                    ? undefined
-                    : t("providerAdvanced.testReturnNeedSave", {
-                        defaultValue: "保存供应商后才能测试",
-                      })
-                }
-              >
-                {isTestingModel ? (
-                  <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" />
-                ) : null}
-                {t("providerAdvanced.testReturn", {
-                  defaultValue: "测试返回",
-                })}
-              </Button>
-              {(modelTestResult || modelTestError) && (
-                <div
-                  className={
-                    modelTestResult
-                      ? "rounded-md border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-xs text-emerald-700 dark:text-emerald-300"
-                      : "rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive"
-                  }
-                >
-                  {modelTestResult
-                    ? t("providerAdvanced.testReturnSuccess", {
-                        providerName: baseUrl || "Claude",
-                        model: modelTestResult.modelUsed,
-                        responseTimeMs: modelTestResult.responseTimeMs,
-                        defaultValue:
-                          "{{providerName}} 返回成功：{{model}} ({{responseTimeMs}}ms)",
-                      })
-                    : t("providerAdvanced.testReturnFailed", {
-                        message: modelTestError || "",
-                        defaultValue: "测试失败：{{message}}",
-                      })}
-                  {modelTestResult && (
-                    <pre className="mt-2 max-h-40 overflow-y-auto whitespace-pre-wrap rounded bg-background/80 p-2 text-foreground">
-                      {modelTestResult.responseText ||
-                        t("providerAdvanced.testReturnEmpty", {
-                          defaultValue: "模型返回为空",
-                        })}
-                    </pre>
-                  )}
-                </div>
-              )}
             </div>
           </CollapsibleContent>
         </Collapsible>
